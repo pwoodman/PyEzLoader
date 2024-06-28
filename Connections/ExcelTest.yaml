@@ -1,0 +1,7 @@
+connections:
+  - name: ExcelConnection1
+    type: Excel
+    file_path: /path/to/file.xlsx
+    sheet_name: Sheet1
+    range: A1:B10
+    header_start_row: 0

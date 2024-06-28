@@ -1,0 +1,4 @@
+connections:
+  - name: CSVConnection1
+    type: CSV
+    file_path: /path/to/file.csv

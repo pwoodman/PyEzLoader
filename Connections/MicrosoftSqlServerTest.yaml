@@ -1,0 +1,8 @@
+connections:
+  - name: SQLServerConnection1
+    type: MS SQL Server
+    server: myserver.com
+    database: mydatabase
+    authentication:
+      username: myusername
+      password: mypassword
