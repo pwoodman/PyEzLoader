@@ -1,4 +1,4 @@
-connections:
-  - name: CSVConnection1
-    type: CSV
-    file_path: /path/to/file.csv
+ConnectionName: CSVConnection
+EnvironmentName: Production
+type: CSV
+file_path: "/path/to/csv/file.csv"

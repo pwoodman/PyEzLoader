@@ -1,9 +1,6 @@
-connections:
-  - name: SnowflakeConnection
-    type: Snowflake
-    account: myaccount
-    database: mydatabase
-    schema: myschema
-    authentication:
-      username: myusername
-      password: mypassword
+ConnectionName: SnowflakeConnection
+EnvironmentName: Production
+type: Snowflake
+account: "your_account"
+username: "your_username"
+password: "your_password"

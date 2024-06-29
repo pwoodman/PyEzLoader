@@ -1,0 +1,34 @@
+schedules:
+  daily_schedule:
+    schedule_type: daily
+    time: "10:00"
+
+  hourly_schedule:
+    schedule_type: hourly
+    minute: 30
+
+  weekly_schedule:
+    schedule_type: cron
+    cron: "0 0 * * 0"
+
+  monthly_schedule:
+    schedule_type: cron
+    cron: "0 0 1 * *"
+
+  first_of_month_schedule:
+    schedule_type: cron
+    cron: "0 0 1 * *"
+
+  last_of_month_schedule:
+    schedule_type: cron
+    cron: "0 0 L * *"
+
+  first_plus_days_schedule:
+    schedule_type: cron
+    cron: "0 0 10 * *"
+    days_offset: 5
+
+  last_minus_one_day_schedule:
+    schedule_type: cron
+    cron: "0 0 L * *"
+    days_offset: -1
