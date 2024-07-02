@@ -1,0 +1,9 @@
+ConnectionName: MySQLConnection1
+type: MySQL
+module: mysql_connector
+class: MySQLConnector
+host: your_host.mysql.database.azure.com
+database: your_database
+username: your_username
+password: your_password
+port: 3306  # Optional, default is 3306

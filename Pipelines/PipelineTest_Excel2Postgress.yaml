@@ -1,0 +1,30 @@
+########################################
+# Basic Configuration
+########################################
+EnvironmentName: Production
+pipelines:
+  - name: PipelineTest_Excel2Postgress
+    enabled: true
+########################################
+# Source Connection & Settings
+########################################
+    source:
+      connection: winemag-data_EXCEL
+########################################
+# Transformations
+########################################
+    transformations:
+      - type: add_timestamp
+        column_name: processed_timestamp
+########################################
+# Target Connection & Settings
+########################################
+    target:
+      connection: SupabaseDefault
+      table_name: winemag-data_EXCEL
+      mode: replace
+########################################
+# Schedule Configuration
+########################################
+    schedule:
+      name: hourly_schedule  # Ensure this matches a defined schedule in your schedules folder

@@ -1,7 +1,6 @@
-ConnectionName: ExcelConnection
+ConnectionName: winemag-data_EXCEL
 EnvironmentName: Production
 type: Excel
-file_path: "/path/to/excel/file.xlsx"
-sheet_name: "Sheet1"
+file_path: "C:/Users/patri/Downloads/winemag-data-130k-v2.xlsx"
+sheet_name: "data"
 header_start_row: 0
-range: [0, 100]
