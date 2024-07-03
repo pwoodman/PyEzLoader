@@ -18,32 +18,25 @@ class BaseConnector:
     def _connect(self):
         raise NotImplementedError("_connect method not implemented")
 
-    def read(self, query):
+    def read(self, query=None):
         conn = self._connect()
-        df = pd.read_sql(query, conn)
+        df = pd.read_sql(query, conn) if query else pd.DataFrame()
         conn.close()
         logging.info("Successfully read data from the database.")
         return df
 
     def write(self, df, table_name, mode='append'):
         conn = self._connect()
-        cursor = conn.cursor()
         if mode == 'truncate':
             self.truncate_table(table_name)
-        placeholder = '%s' if self.config['type'] in ['PostgreSQL', 'MySQL'] else '?'
-        for _, row in df.iterrows():
-            cursor.execute(f"INSERT INTO {table_name} VALUES ({', '.join([placeholder for _ in row])})", tuple(row))
-        conn.commit()
-        cursor.close()
+        df.to_sql(table_name, conn, if_exists='append', index=False)
         conn.close()
         logging.info(f"Successfully wrote data to {table_name} table.")
 
     def truncate_table(self, table_name):
         conn = self._connect()
-        cursor = conn.cursor()
-        cursor.execute(f"TRUNCATE TABLE {table_name}")
+        conn.execute(text(f"TRUNCATE TABLE {table_name}"))
         conn.commit()
-        cursor.close()
         conn.close()
         logging.info(f"Successfully truncated {table_name} table.")
 
@@ -52,15 +45,13 @@ class ExcelConnector(BaseConnector):
         df = pd.read_excel(self.config['file_path'], 
                            sheet_name=self.config.get('sheet_name'), 
                            header=self.config.get('header_start_row', 0))
-        if 'range' in self.config:
-            df = df.loc[self.config['range']]
         logging.info(f"Successfully read data from Excel file: {self.config['file_path']}.")
         return df
 
     def write(self, df, table_name, mode='append'):
         df.to_excel(self.config['file_path'], index=False)
         logging.info(f"Successfully wrote data to Excel file: {self.config['file_path']}.")
-        
+
 class CSVConnector(BaseConnector):
     def read(self, query=None):
         file_path = self.config['file_path']
@@ -71,29 +62,16 @@ class CSVConnector(BaseConnector):
                 result = chardet.detect(rawdata)
                 encoding = result['encoding']
         delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
-        fallback_encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
-        for enc in [encoding] + fallback_encodings:
-            try:
-                df = pd.read_csv(file_path, encoding=enc, delimiter=delimiter, engine='python', on_bad_lines='warn')
-                logging.info(f"Successfully read data from file: {file_path} with encoding {enc}.")
-                return df
-            except UnicodeDecodeError as e:
-                logging.warning(f"Failed to read file {file_path} with encoding {enc}. Error: {e}")
-            except pd.errors.ParserError as e:
-                logging.warning(f"Parser error encountered while reading file {file_path} with encoding {enc}. Error: {e}")
-        logging.error(f"Failed to read file {file_path} with all attempted encodings.")
-        raise UnicodeDecodeError(f"Failed to read file {file_path} with all attempted encodings.")
-        
+        df = pd.read_csv(file_path, encoding=encoding, delimiter=delimiter, engine='python', on_bad_lines='warn')
+        logging.info(f"Successfully read data from file: {file_path} with encoding {encoding}.")
+        return df
+
     def write(self, df, table_name, mode='append'):
         file_path = self.config['file_path']
         encoding = self.config.get('encoding', 'utf-8')
         delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
-        try:
-            df.to_csv(file_path, index=False, sep=delimiter, encoding=encoding)
-            logging.info(f"Successfully wrote data to file: {file_path} with encoding {encoding}.")
-        except Exception as e:
-            logging.error(f"Failed to write data to file: {file_path}. Error: {e}")
-            raise
+        df.to_csv(file_path, index=False, sep=delimiter, encoding=encoding)
+        logging.info(f"Successfully wrote data to file: {file_path} with encoding {encoding}.")
 
 class PostgreSQLConnector(BaseConnector):
     def __init__(self, config):
@@ -101,88 +79,48 @@ class PostgreSQLConnector(BaseConnector):
         self.engine = self._create_engine()
 
     def _create_engine(self):
-        try:
-            connection_string = (
-                f"postgresql+psycopg2://{self.config['user']}:{self.config['password']}@"
-                f"{self.config['host']}:{self.config.get('port', 5432)}/"
-                f"{self.config.get('dbname', 'postgres')}"
-            )
-            return create_engine(
-                connection_string,
-                poolclass=QueuePool,
-                pool_size=5,
-                max_overflow=10,
-                pool_timeout=30,
-                pool_recycle=1800,
-                connect_args={'sslmode': 'require'}
-            )
-        except Exception as e:
-            error_msg = f"Failed to create database engine: {e}"
-            logging.error(error_msg)
-            raise ConnectionError(error_msg)
+        connection_string = (
+            f"postgresql+psycopg2://{self.config['user']}:{self.config['password']}@"
+            f"{self.config['host']}:{self.config.get('port', 5432)}/"
+            f"{self.config.get('dbname', 'postgres')}"
+        )
+        return create_engine(
+            connection_string,
+            poolclass=QueuePool,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=1800,
+            connect_args={'sslmode': 'require'}
+        )
+
+    def _connect(self):
+        return self.engine.connect()
 
     def table_exists(self, table_name):
-        try:
-            with self.engine.connect() as connection:
-                result = connection.execute(text(
-                    f"SELECT to_regclass('{table_name}') IS NOT NULL"
-                ))
-                return result.scalar()
-        except Exception as e:
-            logging.error(f"Error checking if table exists: {e}")
-            return False
+        result = self.engine.execute(text(f"SELECT to_regclass('{table_name}') IS NOT NULL")).scalar()
+        return result if result is not None else False
 
     def read(self, query):
-        if query is None:
-            logging.warning("No query provided for PostgreSQL read operation. Returning empty DataFrame.")
-            return pd.DataFrame()
-        
         try:
-            with self.engine.connect() as connection:
-                df = pd.read_sql(text(query), connection)
+            df = pd.read_sql(text(query), self.engine)
             logging.info(f"Successfully executed query: {query}")
             return df
         except ProgrammingError as e:
-            if 'relation' in str(e) and 'does not exist' in str(e):
-                table_name = str(e).split('"')[1]
-                logging.warning(f"Table '{table_name}' does not exist. Returning empty DataFrame.")
-                return pd.DataFrame()
-            else:
-                raise
-        except Exception as e:
-            error_msg = f"Error executing query: {e}"
-            logging.error(error_msg)
+            logging.error(f"Error executing query: {e}")
             raise
 
     def write(self, df, table_name, mode='append'):
-        try:
-            # Convert all object columns to strings
-            for col in df.select_dtypes(include=['object']).columns:
-                df[col] = df[col].astype(str)
-            
-            if_exists = 'replace' if mode == 'truncate' else 'append'
-            
-            with self.engine.connect() as connection:
-                df.to_sql(table_name, connection, if_exists=if_exists, index=False)
-            
-            logging.info(f"Successfully wrote data to {table_name} table.")
-        except Exception as e:
-            error_msg = f"Error writing data to {table_name}: {e}"
-            logging.error(error_msg)
-            raise
+        if_exists = 'replace' if mode == 'truncate' else 'append'
+        df.to_sql(table_name, self.engine, if_exists=if_exists, index=False)
+        logging.info(f"Successfully wrote data to {table_name} table.")
 
     def truncate_table(self, table_name):
-        try:
-            if self.table_exists(table_name):
-                with self.engine.connect() as connection:
-                    connection.execute(text(f"TRUNCATE TABLE {table_name}"))
-                logging.info(f"Successfully truncated {table_name} table.")
-            else:
-                logging.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
-        except Exception as e:
-            error_msg = f"Error truncating table {table_name}: {e}"
-            logging.error(error_msg)
-            raise
+        if self.table_exists(table_name):
+            self.engine.execute(text(f"TRUNCATE TABLE {table_name}"))
+            logging.info(f"Successfully truncated {table_name} table.")
+        else:
+            logging.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
 
     def __del__(self):
         if hasattr(self, 'engine'):
@@ -202,13 +140,10 @@ class DatabaseConnector:
     def load_connections(self, folder):
         for filename in os.listdir(folder):
             if filename.endswith('.yaml'):
-                try:
-                    with open(os.path.join(folder, filename), 'r') as file:
-                        config = yaml.safe_load(file)
-                        self.connections[config['ConnectionName']] = config
-                        logging.info(f"Loaded connection configuration for {config['ConnectionName']}.")
-                except yaml.YAMLError as e:
-                    logging.error(f"Failed to load YAML configuration: {e}")
+                with open(os.path.join(folder, filename), 'r') as file:
+                    config = yaml.safe_load(file)
+                    self.connections[config['ConnectionName']] = config
+                    logging.info(f"Loaded connection configuration for {config['ConnectionName']}.")
 
     def get_connector(self, connection_name):
         config = self.connections.get(connection_name)
@@ -231,11 +166,7 @@ class Pipeline:
         source_connector = self.connector.get_connector(self.config['source']['connection'])
         target_connector = self.connector.get_connector(self.config['target']['connection'])
         
-        if source_query:
-            source_df = source_connector.read(source_query)
-        else:
-            source_df = source_connector.read()
-
+        source_df = source_connector.read(source_query) if source_query else source_connector.read()
         target_table = self.config['target']['table_name']
         
         if not target_connector.table_exists(target_table):
