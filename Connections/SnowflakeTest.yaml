@@ -1,6 +1,0 @@
-ConnectionName: SnowflakeConnection
-EnvironmentName: Production
-type: Snowflake
-account: "your_account"
-username: "your_username"
-password: "your_password"

@@ -1,0 +1,4 @@
+ConnectionName: TestCSV
+encoding: utf-8
+file_path: test.csv
+type: CSV

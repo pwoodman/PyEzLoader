@@ -1,0 +1,8 @@
+ConnectionName: TestRedshift
+dbname: test_db
+host: localhost
+password: test_password
+port: 5439
+transaction_mode: read_write
+type: Redshift
+user: test_user

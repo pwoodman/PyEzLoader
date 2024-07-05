@@ -1,0 +1,5 @@
+ConnectionName: TestExcel
+file_path: test.xlsx
+header_start_row: 0
+sheet_name: Sheet1
+type: Excel

@@ -1,0 +1,8 @@
+ConnectionName: TestPostgreSQL
+dbname: test_db
+host: localhost
+password: test_password
+port: 5432
+transaction_mode: read_write
+type: PostgreSQL
+user: test_user

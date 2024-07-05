@@ -1,120 +1,165 @@
 import io
 import logging
+from typing import Dict, Any, Optional, Union
+from contextlib import contextmanager
+
 import pandas as pd
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.pool import QueuePool
-import chardet
-import os
 import yaml
+import chardet
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import QueuePool
+from sqlalchemy.engine.base import Engine
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class BaseConnector:
-    def __init__(self, config):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.transaction_mode = config.get('transaction_mode', 'read_write')
 
+    @contextmanager
     def _connect(self):
         raise NotImplementedError("_connect method not implemented")
 
-    def _start_transaction(self, conn):
-        if self.transaction_mode in ('write', 'read_write'):
-            conn.execute("START TRANSACTION")
-            logging.info("Transaction started.")
+    def _execute_transaction(self, conn, operation, transaction_mode='read_write'):
+        if transaction_mode in ('write', 'read_write'):
+            try:
+                conn.execute(text("START TRANSACTION"))
+                operation(conn)
+                conn.execute(text("COMMIT"))
+                logger.info("Transaction committed successfully.")
+            except Exception as e:
+                conn.execute(text("ROLLBACK"))
+                logger.error(f"Transaction rolled back. Error: {e}")
+                raise
 
-    def _commit_transaction(self, conn):
-        if self.transaction_mode in ('write', 'read_write'):
-            conn.execute("COMMIT")
-            logging.info("Transaction committed.")
+    def read(self, query: Optional[str] = None) -> pd.DataFrame:
+        raise NotImplementedError("read method not implemented")
 
-    def _rollback_transaction(self, conn):
-        if self.transaction_mode in ('write', 'read_write'):
-            conn.execute("ROLLBACK")
-            logging.warning("Transaction rolled back.")
+    def write(self, df: pd.DataFrame, table_name: str, mode: str = 'append') -> None:
+        raise NotImplementedError("write method not implemented")
 
-    def read(self, query=None):
-        conn = self._connect()
-        self._start_transaction(conn)
+    def table_exists(self, table_name: str) -> bool:
+        raise NotImplementedError("table_exists method not implemented")
+
+    def execute_query(self, query: str) -> None:
+        with self._connect() as conn:
+            self._execute_transaction(conn, lambda c: c.execute(text(query)))
+
+class FileConnector(BaseConnector):
+    def read(self, query: Optional[str] = None) -> pd.DataFrame:
+        raise NotImplementedError("read method not implemented")
+
+    def write(self, df: pd.DataFrame, table_name: str, mode: str = 'append') -> None:
+        raise NotImplementedError("write method not implemented")
+
+class ExcelConnector(FileConnector):
+    def read(self, query: Optional[str] = None) -> pd.DataFrame:
         try:
-            df = pd.read_sql(query, conn) if query else pd.DataFrame()
-            self._commit_transaction(conn)
+            df = pd.read_excel(self.config['file_path'],
+                               sheet_name=self.config.get('sheet_name'),
+                               header=self.config.get('header_start_row', 0))
+            logger.info(f"Successfully read data from Excel file: {self.config['file_path']}.")
+            return df
         except Exception as e:
-            self._rollback_transaction(conn)
-            logging.error(f"Error during read operation: {e}")
+            logger.error(f"Error reading Excel file: {e}")
             raise
-        finally:
-            conn.close()
-        logging.info("Successfully read data from the database.")
-        return df
 
-    def write(self, df, table_name, mode='append'):
-        conn = self._connect()
-        self._start_transaction(conn)
+    def write(self, df: pd.DataFrame, table_name: str, mode: str = 'append') -> None:
         try:
-            if mode == 'truncate':
-                self.truncate_table(table_name)
-            df.to_sql(table_name, conn, if_exists='append', index=False)
-            self._commit_transaction(conn)
+            df.to_excel(self.config['file_path'], index=False)
+            logger.info(f"Successfully wrote data to Excel file: {self.config['file_path']}.")
         except Exception as e:
-            self._rollback_transaction(conn)
-            logging.error(f"Error during write operation: {e}")
+            logger.error(f"Error writing to Excel file: {e}")
             raise
-        finally:
-            conn.close()
-        logging.info(f"Successfully wrote data to {table_name} table.")
 
-    def truncate_table(self, table_name):
-        conn = self._connect()
-        self._start_transaction(conn)
+class CSVConnector(FileConnector):
+    def read(self, query: Optional[str] = None) -> pd.DataFrame:
         try:
-            conn.execute(text(f"TRUNCATE TABLE {table_name}"))
-            self._commit_transaction(conn)
+            file_path = self.config['file_path']
+            encoding = self.config.get('encoding') or self._detect_encoding(file_path)
+            delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
+            df = pd.read_csv(file_path, encoding=encoding, delimiter=delimiter, engine='python', on_bad_lines='warn')
+            logger.info(f"Successfully read data from file: {file_path} with encoding {encoding}.")
+            return df
         except Exception as e:
-            self._rollback_transaction(conn)
-            logging.error(f"Error during truncate operation: {e}")
+            logger.error(f"Error reading CSV file: {e}")
             raise
-        finally:
-            conn.close()
-        logging.info(f"Successfully truncated {table_name} table.")
 
-class ExcelConnector(BaseConnector):
-    def read(self, query=None):
-        df = pd.read_excel(self.config['file_path'],
-                           sheet_name=self.config.get('sheet_name'),
-                           header=self.config.get('header_start_row', 0))
-        logging.info(f"Successfully read data from Excel file: {self.config['file_path']}.")
-        return df
+    def write(self, df: pd.DataFrame, table_name: str, mode: str = 'append') -> None:
+        try:
+            file_path = self.config['file_path']
+            encoding = self.config.get('encoding', 'utf-8')
+            delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
+            df.to_csv(file_path, index=False, sep=delimiter, encoding=encoding)
+            logger.info(f"Successfully wrote data to file: {file_path} with encoding {encoding}.")
+        except Exception as e:
+            logger.error(f"Error writing to CSV file: {e}")
+            raise
 
-    def write(self, df, table_name, mode='append'):
-        df.to_excel(self.config['file_path'], index=False)
-        logging.info(f"Successfully wrote data to Excel file: {self.config['file_path']}.")
+    def _detect_encoding(self, file_path: str) -> str:
+        with open(file_path, 'rb') as f:
+            rawdata = f.read(10000)
+        return chardet.detect(rawdata)['encoding']
 
-class CSVConnector(BaseConnector):
-    def read(self, query=None):
-        file_path = self.config['file_path']
-        encoding = self.config.get('encoding')
-        if not encoding:
-            with open(file_path, 'rb') as f:
-                rawdata = f.read(10000)
-                result = chardet.detect(rawdata)
-                encoding = result['encoding']
-        delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
-        df = pd.read_csv(file_path, encoding=encoding, delimiter=delimiter, engine='python', on_bad_lines='warn')
-        logging.info(f"Successfully read data from file: {file_path} with encoding {encoding}.")
-        return df
-
-    def write(self, df, table_name, mode='append'):
-        file_path = self.config['file_path']
-        encoding = self.config.get('encoding', 'utf-8')
-        delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
-        df.to_csv(file_path, index=False, sep=delimiter, encoding=encoding)
-        logging.info(f"Successfully wrote data to file: {file_path} with encoding {encoding}.")
-
-class PostgreSQLConnector(BaseConnector):
-    def __init__(self, config):
+class SQLConnector(BaseConnector):
+    def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.engine = self._create_engine()
+        self.engine: Engine = self._create_engine()
 
-    def _create_engine(self):
+    def _create_engine(self) -> Engine:
+        raise NotImplementedError("_create_engine method not implemented")
+
+    @contextmanager
+    def _connect(self):
+        connection = self.engine.connect()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+    def read(self, query: str) -> pd.DataFrame:
+        try:
+            with self._connect() as connection:
+                df = pd.read_sql(text(query), connection)
+            logger.info("Successfully executed query: %s", query)
+            return df
+        except SQLAlchemyError as e:
+            logger.error("Error executing query: %s", str(e))
+            raise
+
+    def write(self, df: pd.DataFrame, table_name: str, mode: str = 'append') -> None:
+        try:
+            if_exists = 'replace' if mode in ('truncate', 'replace') else 'append'
+            with self._connect() as connection:
+                if mode == 'truncate':
+                    self.truncate_table(table_name)
+                elif mode == 'replace':
+                    self.drop_table(table_name)
+                df.to_sql(table_name, connection, if_exists=if_exists, index=False)
+            logger.info(f"Successfully wrote data to {table_name} table.")
+        except Exception as e:
+            logger.error(f"Error writing to table: {e}")
+            raise
+
+    def truncate_table(self, table_name: str) -> None:
+        if self.table_exists(table_name):
+            self.execute_query(f"TRUNCATE TABLE {table_name}")
+            logger.info(f"Successfully truncated {table_name} table.")
+        else:
+            logger.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
+
+    def drop_table(self, table_name: str) -> None:
+        self.execute_query(f"DROP TABLE IF EXISTS {table_name}")
+        logger.info(f"Successfully dropped {table_name} table.")
+
+    def __del__(self):
+        if hasattr(self, 'engine'):
+            self.engine.dispose()
+
+class PostgreSQLConnector(SQLConnector):
+    def _create_engine(self) -> Engine:
         connection_string = (
             f"postgresql+psycopg2://{self.config['user']}:{self.config['password']}@"
             f"{self.config['host']}:{self.config.get('port', 5432)}/"
@@ -130,65 +175,13 @@ class PostgreSQLConnector(BaseConnector):
             connect_args={'sslmode': 'require'}
         )
 
-    def _connect(self):
-        return self.engine.connect()
-
-    def table_exists(self, table_name):
-        with self.engine.connect() as connection:
+    def table_exists(self, table_name: str) -> bool:
+        with self._connect() as connection:
             result = connection.execute(text(f"SELECT to_regclass('{table_name}') IS NOT NULL")).scalar()
-            return result if result is not None else False
+            return bool(result)
 
-    def read(self, query):
-        try:
-            with self.engine.connect() as connection:
-                df = pd.read_sql(text(query), connection)
-            logging.info(f"Successfully executed query: {query}")
-            return df
-        except ProgrammingError as e:
-            logging.error(f"Error executing query: {e}")
-            raise
-
-    def write(self, df, table_name, mode='append'):
-        if_exists = 'replace' if mode == 'truncate' else 'append'
-        with self.engine.connect() as connection:
-            if if_exists == 'replace':
-                connection.execute(text(f"DROP TABLE IF EXISTS \"{table_name}\""))
-                df.head(0).to_sql(table_name, connection, if_exists='replace', index=False)
-
-            # Disable indexes
-            connection.execute(text(f"ALTER TABLE \"{table_name}\" DISABLE TRIGGER ALL"))
-
-            output = io.StringIO()
-            df.to_csv(output, sep='\t', header=False, index=False)
-            output.seek(0)
-
-            # Use copy_expert to execute the COPY command
-            copy_sql = f"COPY \"{table_name}\" FROM STDIN WITH CSV DELIMITER E'\t'"
-            connection.connection.connection.cursor().copy_expert(sql=copy_sql, file=output)
-
-            # Re-enable indexes
-            connection.execute(text(f"ALTER TABLE \"{table_name}\" ENABLE TRIGGER ALL"))
-            connection.commit()
-        logging.info(f"Successfully wrote data to {table_name} table.")
-
-    def truncate_table(self, table_name):
-        if self.table_exists(table_name):
-            with self.engine.connect() as connection:
-                connection.execute(text(f"TRUNCATE TABLE \"{table_name}\""))
-            logging.info(f"Successfully truncated {table_name} table.")
-        else:
-            logging.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
-
-    def __del__(self):
-        if hasattr(self, 'engine'):
-            self.engine.dispose()
-
-class MySQLConnector(BaseConnector):
-    def __init__(self, config):
-        super().__init__(config)
-        self.engine = self._create_engine()
-
-    def _create_engine(self):
+class MySQLConnector(SQLConnector):
+    def _create_engine(self) -> Engine:
         connection_string = (
             f"mysql+mysqlconnector://{self.config['user']}:{self.config['password']}@"
             f"{self.config['host']}:{self.config.get('port', 3306)}/"
@@ -203,48 +196,13 @@ class MySQLConnector(BaseConnector):
             pool_recycle=1800
         )
 
-    def _connect(self):
-        return self.engine.connect()
-
-    def read(self, query):
-        try:
-            with self.engine.connect() as connection:
-                df = pd.read_sql(text(query), connection)
-            logging.info(f"Successfully executed query: {query}")
-            return df
-        except ProgrammingError as e:
-            logging.error(f"Error executing query: {e}")
-            raise
-
-    def write(self, df, table_name, mode='append'):
-        if_exists = 'replace' if mode == 'truncate' else 'append'
-        with self.engine.connect() as connection:
-            df.to_sql(table_name, connection, if_exists=if_exists, index=False)
-        logging.info(f"Successfully wrote data to {table_name} table.")
-
-    def truncate_table(self, table_name):
-        if self.table_exists(table_name):
-            with self.engine.connect() as connection:
-                connection.execute(text(f"TRUNCATE TABLE {table_name}"))
-            logging.info(f"Successfully truncated {table_name} table.")
-        else:
-            logging.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
-
-    def table_exists(self, table_name):
-        with self.engine.connect() as connection:
+    def table_exists(self, table_name: str) -> bool:
+        with self._connect() as connection:
             result = connection.execute(text(f"SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '{table_name}'")).scalar()
-            return result if result is not None else False
+            return bool(result)
 
-    def __del__(self):
-        if hasattr(self, 'engine'):
-            self.engine.dispose()
-
-class RedshiftConnector(BaseConnector):
-    def __init__(self, config):
-        super().__init__(config)
-        self.engine = self._create_engine()
-
-    def _create_engine(self):
+class RedshiftConnector(SQLConnector):
+    def _create_engine(self) -> Engine:
         connection_string = (
             f"redshift+psycopg2://{self.config['user']}:{self.config['password']}@"
             f"{self.config['host']}:{self.config.get('port', 5439)}/"
@@ -259,41 +217,67 @@ class RedshiftConnector(BaseConnector):
             pool_recycle=1800
         )
 
-    def _connect(self):
-        return self.engine.connect()
-
-    def read(self, query):
-        try:
-            with self.engine.connect() as connection:
-                df = pd.read_sql(text(query), connection)
-            logging.info(f"Successfully executed query: {query}")
-            return df
-        except ProgrammingError as e:
-            logging.error(f"Error executing query: {e}")
-            raise
-
-    def write(self, df, table_name, mode='append'):
-        if_exists = 'replace' if mode == 'truncate' else 'append'
-        with self.engine.connect() as connection:
-            df.to_sql(table_name, connection, if_exists=if_exists, index=False)
-        logging.info(f"Successfully wrote data to {table_name} table.")
-
-    def truncate_table(self, table_name):
-        if self.table_exists(table_name):
-            with self.engine.connect() as connection:
-                connection.execute(text(f"TRUNCATE TABLE {table_name}"))
-            logging.info(f"Successfully truncated {table_name} table.")
-        else:
-            logging.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
-
-    def table_exists(self, table_name):
-        with self.engine.connect() as connection:
+    def table_exists(self, table_name: str) -> bool:
+        with self._connect() as connection:
             result = connection.execute(text(f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'")).scalar()
-            return result if result is not None else False
+            return bool(result)
 
-    def __del__(self):
-        if hasattr(self, 'engine'):
-            self.engine.dispose()
+class MSSQLConnector(SQLConnector):
+    def _create_engine(self) -> Engine:
+        connection_string = (
+            f"mssql+pyodbc://{self.config['user']}:{self.config['password']}@"
+            f"{self.config['host']}:{self.config.get('port', 1433)}/"
+            f"{self.config['dbname']}?driver=ODBC+Driver+17+for+SQL+Server"
+        )
+        return create_engine(connection_string)
+
+    def table_exists(self, table_name: str) -> bool:
+        with self._connect() as connection:
+            result = connection.execute(text(f"SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '{table_name}'")).scalar()
+            return bool(result)
+
+class OracleConnector(SQLConnector):
+    def _create_engine(self) -> Engine:
+        connection_string = (
+            f"oracle+cx_oracle://{self.config['user']}:{self.config['password']}@"
+            f"{self.config['host']}:{self.config.get('port', 1521)}/"
+            f"{self.config['service_name']}"
+        )
+        return create_engine(connection_string)
+
+    def table_exists(self, table_name: str) -> bool:
+        with self._connect() as connection:
+            result = connection.execute(text(f"SELECT 1 FROM all_tables WHERE table_name = '{table_name.upper()}'")).scalar()
+            return bool(result)
+
+class SQLiteConnector(SQLConnector):
+    def _create_engine(self) -> Engine:
+        return create_engine(f"sqlite:///{self.config['file_path']}")
+
+    def table_exists(self, table_name: str) -> bool:
+        with self._connect() as connection:
+            result = connection.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")).scalar()
+            return bool(result)
+
+    def truncate_table(self, table_name: str) -> None:
+        if self.table_exists(table_name):
+            self.execute_query(f"DELETE FROM {table_name}")
+            logger.info(f"Successfully truncated {table_name} table.")
+        else:
+            logger.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
+
+class ODBCConnector(SQLConnector):
+    def _create_engine(self) -> Engine:
+        connection_string = (
+            f"mssql+pyodbc://{self.config['user']}:{self.config['password']}@"
+            f"{self.config['dsn']}"
+        )
+        return create_engine(connection_string)
+
+    def table_exists(self, table_name: str) -> bool:
+        with self._connect() as connection:
+            result = connection.execute(text(f"SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '{table_name}'")).scalar()
+            return bool(result)
 
 class DatabaseConnector:
     CONNECTOR_MAP = {
@@ -301,28 +285,73 @@ class DatabaseConnector:
         'CSV': CSVConnector,
         'PostgreSQL': PostgreSQLConnector,
         'MySQL': MySQLConnector,
-        'Redshift': RedshiftConnector
+        'Redshift': RedshiftConnector,
+        'MSSQL': MSSQLConnector,
+        'Oracle': OracleConnector,
+        'SQLite': SQLiteConnector,
+        'ODBC': ODBCConnector
     }
 
-    def __init__(self, connections_folder='Connections'):
-        self.connections = {}
-        self.load_connections(connections_folder)
-
-    def load_connections(self, folder):
-        for filename in os.listdir(folder):
-            if filename.endswith('.yaml'):
-                with open(os.path.join(folder, filename), 'r') as file:
-                    config = yaml.safe_load(file)
-                    self.connections[config['ConnectionName']] = config
-                    logging.info(f"Loaded connection configuration for {config['ConnectionName']}.")
-
-    def get_connector(self, connection_name):
-        config = self.connections.get(connection_name)
-        if not config:
-            logging.error(f"Connection '{connection_name}' not found")
-            raise ValueError(f"Connection '{connection_name}' not found")
-        connector_class = self.CONNECTOR_MAP.get(config['type'])
+    @staticmethod
+    def get_connector(connector_type: str, config: Dict[str, Any]) -> BaseConnector:
+        connector_class = DatabaseConnector.CONNECTOR_MAP.get(connector_type)
         if not connector_class:
-            logging.error(f"Unsupported connection type: {config['type']}")
-            raise ValueError(f"Unsupported connection type: {config['type']}")
+            raise ValueError(f"Unsupported connector type: {connector_type}")
         return connector_class(config)
+
+    @staticmethod
+    def read(connector_type: str, config: Dict[str, Any], query: Optional[str] = None) -> pd.DataFrame:
+        """
+        Read data from the specified connector.
+
+        :param connector_type: Type of the connector (e.g., 'PostgreSQL', 'CSV')
+        :param config: Configuration dictionary for the connector
+        :param query: SQL query to execute (for SQL-based connectors)
+        :return: pandas DataFrame with the query results
+        """
+        connector = DatabaseConnector.get_connector(connector_type, config)
+        return connector.read(query)
+
+    @staticmethod
+    def append(connector_type: str, config: Dict[str, Any], df: pd.DataFrame, table_name: str) -> None:
+        """
+        Append data to an existing table.
+
+        :param connector_type: Type of the connector
+        :param config: Configuration dictionary for the connector
+        :param df: pandas DataFrame to append
+        :param table_name: Name of the target table
+        """
+        connector = DatabaseConnector.get_connector(connector_type, config)
+        connector.write(df, table_name, mode='append')
+        logger.info(f"Successfully appended data to {table_name} table.")
+
+    @staticmethod
+    def truncate_and_load(connector_type: str, config: Dict[str, Any], df: pd.DataFrame, table_name: str) -> None:
+        """
+        Truncate an existing table and load new data.
+
+        :param connector_type: Type of the connector
+        :param config: Configuration dictionary for the connector
+        :param df: pandas DataFrame to load
+        :param table_name: Name of the target table
+        """
+        connector = DatabaseConnector.get_connector(connector_type, config)
+        connector.truncate_table(table_name)
+        connector.write(df, table_name, mode='append')
+        logger.info(f"Successfully truncated and loaded data to {table_name} table.")
+
+    @staticmethod
+    def drop_and_load(connector_type: str, config: Dict[str, Any], df: pd.DataFrame, table_name: str) -> None:
+        """
+        Drop an existing table and create a new one with the provided data.
+
+        :param connector_type: Type of the connector
+        :param config: Configuration dictionary for the connector
+        :param df: pandas DataFrame to load
+        :param table_name: Name of the target table
+        """
+        connector = DatabaseConnector.get_connector(connector_type, config)
+        connector.drop_table(table_name)
+        connector.write(df, table_name, mode='replace')
+        logger.info(f"Successfully dropped and recreated {table_name} table with new data.")

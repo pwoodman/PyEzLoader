@@ -1,0 +1,4 @@
+ConnectionName: TestSQLite
+file_path: test.db
+transaction_mode: read_write
+type: SQLite

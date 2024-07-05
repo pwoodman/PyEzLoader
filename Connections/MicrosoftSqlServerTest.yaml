@@ -1,6 +1,0 @@
-ConnectionName: MSSQLConnection
-EnvironmentName: Production
-type: MS SQL Server
-server: "your_server"
-username: "your_username"
-password: "your_password"
