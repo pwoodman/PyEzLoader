@@ -33,14 +33,14 @@ def send_email(email_settings, subject, body):
     if not email_settings:
         logging.warning("No email settings provided.")
         return
-
+    
     try:
         msg = MIMEMultipart()
         msg['From'] = email_settings['from']
         msg['To'] = email_settings['to']
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-
+        
         server = smtplib.SMTP(email_settings['smtp_server'], email_settings['smtp_port'])
         server.starttls()
         server.login(email_settings['from'], email_settings['password'])
@@ -51,10 +51,17 @@ def send_email(email_settings, subject, body):
     except Exception as e:
         logging.error(f"Failed to send email: {e}")
 
-def trigger_dbt_run(dbt_run_url):
+def trigger_dbt_run(dbt_run_url, job_id, account_id):
     if dbt_run_url:
         try:
-            response = requests.get(dbt_run_url)
+            payload = {
+                "job_id": job_id,
+                "account_id": account_id
+            }
+            headers = {
+                "Content-Type": "application/json"
+            }
+            response = requests.post(dbt_run_url, json=payload, headers=headers)
             if response.status_code == 200:
                 log_info("Successfully triggered dbt run")
             else:
