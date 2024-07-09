@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.engine.base import Engine
 
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -57,9 +58,11 @@ class FileConnector(BaseConnector):
 class ExcelConnector(FileConnector):
     def read(self, query: Optional[str] = None) -> pd.DataFrame:
         try:
-            df = pd.read_excel(self.config['file_path'],
-                               sheet_name=self.config.get('sheet_name'),
-                               header=self.config.get('header_start_row', 0))
+            df = pd.read_excel(
+                self.config['file_path'],
+                sheet_name=self.config.get('sheet_name'),
+                header=self.config.get('header_start_row', 0)
+            )
             logger.info(f"Successfully read data from Excel file: {self.config['file_path']}.")
             return df
         except Exception as e:

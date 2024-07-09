@@ -1,8 +1,0 @@
-ConnectionName: TestMySQL
-dbname: test_db
-host: localhost
-password: test_password
-port: 3306
-transaction_mode: read_write
-type: MySQL
-user: test_user

@@ -1,6 +1,0 @@
-ConnectionName: TestODBC
-dsn: test_dsn
-password: test_password
-transaction_mode: read_write
-type: ODBC
-user: test_user

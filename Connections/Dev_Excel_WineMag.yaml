@@ -1,0 +1,6 @@
+name: Dev_Excel_WineMag
+type: Excel
+file_path: C:/Users/patri/Downloads/winemag-data-130k-v2.xlsx
+sheet_name: notsheet1
+header_start_row: 1
+column_start_row: 1

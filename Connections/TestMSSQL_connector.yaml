@@ -1,8 +1,0 @@
-ConnectionName: TestMSSQL
-dbname: test_db
-host: localhost
-password: test_password
-port: 1433
-transaction_mode: read_write
-type: MSSQL
-user: test_user

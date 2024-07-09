@@ -1,8 +1,0 @@
-ConnectionName: TestOracle
-host: localhost
-password: test_password
-port: 1521
-service_name: test_service
-transaction_mode: read_write
-type: Oracle
-user: test_user
