@@ -1,0 +1,70 @@
+# Pipeline Configuration
+# ======================
+
+name: customer_data_pipeline
+description: "Processes recent customer data and loads it into the data warehouse"
+enabled: true
+owner: "data_team@example.com"
+
+# Source Configuration
+# ====================
+source:
+  connection: source_database
+  type: sql  # Could be 'sql', 'csv', 'excel', etc.
+  query: |
+    SELECT 
+      *
+    FROM customers
+
+
+# Target Configuration
+# ====================
+target:
+  connection: data_warehouse
+  type: sql  # Could be 'sql', 'csv', 'excel', etc.
+  database: analytics_db
+  schema: customer_data
+  table_name: processed_customers
+  mode: append
+
+
+# Data Transformations
+# ====================
+transformations:
+  - name: Add ETL Timestamp
+    type: add_timestamp
+    column_name: etl_timestamp
+
+  - name: Rename Registration Date
+    type: rename_column
+    old_name: registration_date
+    new_name: customer_since
+
+  - name: Standardize Phone Numbers
+    type: standardize_phone
+    column_name: phone_number
+
+  - name: Calculate Customer Value
+    type: calculate_value
+    new_column: customer_value
+    formula: total_purchases * 0.1  # 10% of total purchases
+
+# Post-Processing Utilities
+# =========================
+utilities:
+  run_dbt: 
+    job_name: daily_customer_models
+
+  email_notification:
+    config_name: etl_alerts
+
+# Scheduling (optional)
+# =====================
+schedule:
+  frequency: daily
+  time: "02:00 UTC"
+
+# Version Control
+# ===============
+version: "1.0"
+last_modified: "2024-07-06"
