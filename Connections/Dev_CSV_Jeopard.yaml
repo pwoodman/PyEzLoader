@@ -1,5 +1,5 @@
-name: Dev_Csv_Jeopardy
+name: Dev_CSV_Jeopardy
 type: CSV
 file_path: C:/Users/patri/Downloads/JEOPARDY.csv
 encoding: utf-8
-delimiter: , 
+delimiter: ","

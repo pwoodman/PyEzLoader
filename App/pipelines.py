@@ -61,7 +61,6 @@ class ConfigLoader:
             raise ValueError(f"Connection {connector_name} not found")
         return self.connections[connector_name]
 
-
 class Pipeline:
     def __init__(self, config: Dict[str, Any], connections_folder: str, utilities_folder: str):
         self.config = config
@@ -81,6 +80,7 @@ class Pipeline:
     def setup_source(self):
         source_config = self.config['source']
         self.source_connection_name = source_config['connection_name']
+        log_info(f"Setting up source connection: {self.source_connection_name}")
 
     def setup_target(self):
         target_config = self.config['target']
@@ -88,6 +88,7 @@ class Pipeline:
         self.target_action = target_config['action']
         self.target_schema_name = target_config.get('schema_name')
         self.target_table_name = target_config['table_name']
+        log_info(f"Setting up target connection: {self.target_connection_name}, action: {self.target_action}, schema: {self.target_schema_name}, table: {self.target_table_name}")
 
     def run(self):
         try:
@@ -272,15 +273,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     pipeline_name = args.pipeline_name
 
-    # Define paths to the Pipelines, Connections, and Utilities folders
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    base_dir = os.path.dirname(current_dir)  # Go up one level to PyEzLoader
+    base_dir = os.path.dirname(current_dir)
     pipelines_folder = os.path.join(base_dir, 'Pipelines')
     connections_folder = os.path.join(base_dir, 'Connections')
     schedules_folder = os.path.join(base_dir, 'Schedules')
     utilities_folder = os.path.join(base_dir, 'Utilities')
 
-    # Log the paths for debugging
     log_info(f"Current directory: {current_dir}")
     log_info(f"Base directory: {base_dir}")
     log_info(f"Pipelines folder: {pipelines_folder}")
@@ -288,7 +287,6 @@ if __name__ == "__main__":
     log_info(f"Schedules folder: {schedules_folder}")
     log_info(f"Utilities folder: {utilities_folder}")
 
-    # Check if the folders exist and list their contents
     for folder in [pipelines_folder, connections_folder, schedules_folder, utilities_folder]:
         if os.path.exists(folder):
             log_info(f"{os.path.basename(folder)} folder exists. Contents:")
@@ -306,7 +304,6 @@ if __name__ == "__main__":
         else:
             log_error(f"{os.path.basename(folder)} folder does not exist: {folder}")
 
-    # Create and run the PipelineManager
     try:
         manager = PipelineManager(pipelines_folder, schedules_folder, connections_folder, utilities_folder)
         manager.run_pipeline(pipeline_name)

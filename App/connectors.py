@@ -81,10 +81,12 @@ class CSVConnector(FileConnector):
     def read(self, query: Optional[str] = None) -> pd.DataFrame:
         try:
             file_path = self.config['file_path']
-            encoding = self.config.get('encoding') or self._detect_encoding(file_path)
-            delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
+            encoding = self.config.get('encoding', 'utf-8')
+            delimiter = self.config.get('delimiter', ',')
+            if isinstance(delimiter, str) and delimiter.startswith('"') and delimiter.endswith('"'):
+                delimiter = delimiter[1:-1]
             df = pd.read_csv(file_path, encoding=encoding, delimiter=delimiter, engine='python', on_bad_lines='warn')
-            logger.info(f"Successfully read data from file: {file_path} with encoding {encoding}.")
+            logger.info(f"Successfully read data from file: {file_path} with encoding {encoding} and delimiter '{delimiter}'.")
             return df
         except Exception as e:
             logger.error(f"Error reading CSV file: {e}")
@@ -94,9 +96,11 @@ class CSVConnector(FileConnector):
         try:
             file_path = self.config['file_path']
             encoding = self.config.get('encoding', 'utf-8')
-            delimiter = '\t' if file_path.lower().endswith('.tsv') else ','
+            delimiter = self.config.get('delimiter', ',')
+            if isinstance(delimiter, str) and delimiter.startswith('"') and delimiter.endswith('"'):
+                delimiter = delimiter[1:-1]
             df.to_csv(file_path, index=False, sep=delimiter, encoding=encoding)
-            logger.info(f"Successfully wrote data to file: {file_path} with encoding {encoding}.")
+            logger.info(f"Successfully wrote data to file: {file_path} with encoding {encoding} and delimiter '{delimiter}'.")
         except Exception as e:
             logger.error(f"Error writing to CSV file: {e}")
             raise
@@ -105,6 +109,7 @@ class CSVConnector(FileConnector):
         with open(file_path, 'rb') as f:
             rawdata = f.read(10000)
         return chardet.detect(rawdata)['encoding']
+
 
 class SQLConnector(BaseConnector):
     def __init__(self, config: Dict[str, Any]):
@@ -178,10 +183,38 @@ class PostgreSQLConnector(SQLConnector):
             connect_args={'sslmode': 'require'}
         )
 
-    def table_exists(self, table_name: str) -> bool:
+    def table_exists(self, table_name: str, schema: Optional[str] = None) -> bool:
+        schema_prefix = f"{schema}." if schema else ""
         with self._connect() as connection:
-            result = connection.execute(text(f"SELECT to_regclass('{table_name}') IS NOT NULL")).scalar()
+            result = connection.execute(text(f"SELECT to_regclass('{schema_prefix}{table_name}') IS NOT NULL")).scalar()
             return bool(result)
+
+    def truncate_table(self, table_name: str, schema: Optional[str] = None) -> None:
+        if self.table_exists(table_name, schema):
+            schema_prefix = f"{schema}." if schema else ""
+            self.execute_query(f"TRUNCATE TABLE {schema_prefix}{table_name}")
+            logger.info(f"Successfully truncated {schema_prefix}{table_name} table.")
+        else:
+            logger.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
+
+    def drop_table(self, table_name: str, schema: Optional[str] = None) -> None:
+        schema_prefix = f"{schema}." if schema else ""
+        self.execute_query(f"DROP TABLE IF EXISTS {schema_prefix}{table_name}")
+        logger.info(f"Successfully dropped {schema_prefix}{table_name} table.")
+
+    def write(self, df: pd.DataFrame, table_name: str, mode: str = 'append', schema: Optional[str] = None) -> None:
+        schema_prefix = f"{schema}." if schema else ""
+        if_exists = 'replace' if mode in ('truncate', 'replace') else 'append'
+        with self._connect() as connection:
+            if mode == 'truncate':
+                self.truncate_table(table_name, schema)
+            elif mode == 'replace':
+                self.drop_table(table_name, schema)
+            df.to_sql(table_name, connection, schema=schema, if_exists=if_exists, index=False)
+        logger.info(f"Successfully wrote data to {schema_prefix}{table_name} table.")
+
+
+
 
 class MySQLConnector(SQLConnector):
     def _create_engine(self) -> Engine:
