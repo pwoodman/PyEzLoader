@@ -166,6 +166,7 @@ class SQLConnector(BaseConnector):
         if hasattr(self, 'engine'):
             self.engine.dispose()
 
+
 class PostgreSQLConnector(SQLConnector):
     def _create_engine(self) -> Engine:
         connection_string = (
@@ -180,40 +181,49 @@ class PostgreSQLConnector(SQLConnector):
             max_overflow=30,
             pool_timeout=30,
             pool_recycle=1800,
-            connect_args={'sslmode': 'require'}
+            connect_args={'sslmode': self.config.get('sslmode', 'prefer')}
         )
 
     def table_exists(self, table_name: str, schema: Optional[str] = None) -> bool:
-        schema_prefix = f"{schema}." if schema else ""
+        schema = schema or self.config.get('schema', 'public')
+        query = text("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = :schema AND table_name = :table_name
+            )
+        """)
         with self._connect() as connection:
-            result = connection.execute(text(f"SELECT to_regclass('{schema_prefix}{table_name}') IS NOT NULL")).scalar()
+            result = connection.execute(query, {'schema': schema, 'table_name': table_name}).scalar()
             return bool(result)
 
     def truncate_table(self, table_name: str, schema: Optional[str] = None) -> None:
+        schema = schema or self.config.get('schema', 'public')
         if self.table_exists(table_name, schema):
-            schema_prefix = f"{schema}." if schema else ""
-            self.execute_query(f"TRUNCATE TABLE {schema_prefix}{table_name}")
-            logger.info(f"Successfully truncated {schema_prefix}{table_name} table.")
+            self.execute_query(f'TRUNCATE TABLE {schema}."{table_name}"')
+            logger.info(f"Successfully truncated {schema}.{table_name} table.")
         else:
-            logger.warning(f"Table {table_name} does not exist. Skipping truncate operation.")
+            logger.warning(f"Table {schema}.{table_name} does not exist. Skipping truncate operation.")
 
     def drop_table(self, table_name: str, schema: Optional[str] = None) -> None:
-        schema_prefix = f"{schema}." if schema else ""
-        self.execute_query(f"DROP TABLE IF EXISTS {schema_prefix}{table_name}")
-        logger.info(f"Successfully dropped {schema_prefix}{table_name} table.")
+        schema = schema or self.config.get('schema', 'public')
+        self.execute_query(f'DROP TABLE IF EXISTS {schema}."{table_name}"')
+        logger.info(f"Successfully dropped {schema}.{table_name} table.")
 
     def write(self, df: pd.DataFrame, table_name: str, mode: str = 'append', schema: Optional[str] = None) -> None:
-        schema_prefix = f"{schema}." if schema else ""
-        if_exists = 'replace' if mode in ('truncate', 'replace') else 'append'
+        schema = schema or self.config.get('schema', 'public')
+        if_exists = 'replace' if mode == 'replace' else 'append'
+        
         with self._connect() as connection:
             if mode == 'truncate':
                 self.truncate_table(table_name, schema)
+                df.to_sql(table_name, connection, schema=schema, if_exists='append', index=False)
             elif mode == 'replace':
                 self.drop_table(table_name, schema)
-            df.to_sql(table_name, connection, schema=schema, if_exists=if_exists, index=False)
-        logger.info(f"Successfully wrote data to {schema_prefix}{table_name} table.")
-
-
+                df.to_sql(table_name, connection, schema=schema, if_exists='fail', index=False)
+            else:
+                df.to_sql(table_name, connection, schema=schema, if_exists=if_exists, index=False)
+        
+        logger.info(f"Successfully wrote data to {schema}.{table_name} table.")
 
 
 class MySQLConnector(SQLConnector):
