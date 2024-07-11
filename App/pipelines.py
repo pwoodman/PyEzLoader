@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List, Any
 import logging
 import argparse
+import re
 
 from utilities import (
     log_start_step, log_end_step, log_info, log_warning, log_error,
@@ -80,6 +81,7 @@ class Pipeline:
     def setup_source(self):
         source_config = self.config['source']
         self.source_connection_name = source_config['connection_name']
+        self.source_query = source_config.get('query')
         log_info(f"Setting up source connection: {self.source_connection_name}")
 
     def setup_target(self):
@@ -87,7 +89,19 @@ class Pipeline:
         self.target_connection_name = target_config['connection_name']
         self.target_action = target_config['action']
         self.target_schema_name = target_config.get('schema_name')
-        self.target_table_name = target_config['table_name']
+        
+        # Only require table_name for non-file based connectors
+        connector_type = self.config_loader.get_config_by_name(self.target_connection_name)['type']
+        if connector_type not in ['CSV', 'Excel']:
+            if 'table_name' not in target_config:
+                raise ValueError("Missing required configuration key: 'table_name'")
+            self.target_table_name = target_config['table_name']
+        else:
+            self.target_table_name = None
+            self.sheet_name = target_config.get('sheet_name')
+            self.start_column = target_config.get('start_column')
+            self.start_row = target_config.get('start_row')
+
         log_info(f"Setting up target connection: {self.target_connection_name}, action: {self.target_action}, schema: {self.target_schema_name}, table: {self.target_table_name}")
 
     def run(self):
@@ -116,7 +130,7 @@ class Pipeline:
             raise
         
         source_connector = DatabaseConnector.get_connector(source_config['type'], source_config)
-        df = source_connector.read()
+        df = source_connector.read(self.source_query) if self.source_query else source_connector.read()
         log_end_step("Reading source data")
         return df
 
@@ -133,16 +147,19 @@ class Pipeline:
         schema_name = self.target_schema_name
         table_name = self.target_table_name
 
-        if action == 'append':
-            target_connector.write(df, table_name, mode='append', schema=schema_name)
-        elif action == 'truncate_and_load':
-            target_connector.truncate_table(table_name, schema=schema_name)
-            target_connector.write(df, table_name, mode='append', schema=schema_name)
-        elif action == 'drop_and_load':
-            target_connector.drop_table(table_name, schema=schema_name)
-            target_connector.write(df, table_name, mode='replace', schema=schema_name)
+        if target_config['type'] in ['CSV', 'Excel']:
+            target_connector.write(df, table_name, mode=action, sheet_name=self.sheet_name, start_column=self.start_column, start_row=self.start_row)
         else:
-            raise ValueError(f"Unsupported action: {action}")
+            if action == 'append':
+                target_connector.write(df, table_name, mode='append', schema=schema_name)
+            elif action == 'truncate_and_load':
+                target_connector.truncate_table(table_name, schema=schema_name)
+                target_connector.write(df, table_name, mode='append', schema=schema_name)
+            elif action == 'drop_and_load':
+                target_connector.drop_table(table_name, schema=schema_name)
+                target_connector.write(df, table_name, mode='replace', schema=schema_name)
+            else:
+                raise ValueError(f"Unsupported action: {action}")
 
         log_end_step("Writing target data")
 
@@ -155,7 +172,9 @@ class Pipeline:
         for transformation in self.config.get('transformations', []):
             df = self.apply_transformation(df, transformation)
 
-        self.add_metadata_columns(df)
+        if self.config.get('add_metadata', False):
+            self.add_metadata_columns(df)
+            
         log_end_step("Data transformation")
         return df
 
@@ -175,7 +194,32 @@ class Pipeline:
         elif transformation_type == 'calculate_value':
             df[transformation['new_column']] = df.eval(transformation['formula'])
             log_info(f"Calculated new column: {transformation['new_column']}")
+        elif transformation_type == 'clean_column_names':
+            df.columns = self.clean_column_names(df.columns)
+            log_info("Cleaned column names")
+        elif transformation_type == 'format_column_names':
+            format_type = transformation['format_type']
+            df.columns = self.format_column_names(df.columns, format_type)
+            log_info(f"Formatted column names to {format_type}")
         return df
+
+    def clean_column_names(self, columns: pd.Index) -> pd.Index:
+        clean_columns = [re.sub(r'\W+', '_', col).strip('_') for col in columns]
+        clean_columns = [re.sub(r'_+', '_', col) for col in clean_columns]
+        return pd.Index(clean_columns)
+
+    def format_column_names(self, columns: pd.Index, format_type: str) -> pd.Index:
+        if format_type == 'camel_case':
+            return pd.Index([self.to_camel_case(col) for col in columns])
+        elif format_type == 'all_caps':
+            return pd.Index([col.upper() for col in columns])
+        elif format_type == 'all_lower':
+            return pd.Index([col.lower() for col in columns])
+        return columns
+
+    def to_camel_case(self, s: str) -> str:
+        parts = s.split('_')
+        return parts[0].lower() + ''.join(word.capitalize() for word in parts[1:])
 
     def standardize_phone(self, phone: str) -> str:
         standardized_phone = ''.join(filter(str.isdigit, str(phone)))

@@ -1,0 +1,5 @@
+name: Dev_CSV_JeopardyFromSQL
+type: CSV
+file_path: C:/Users/patri/Downloads/JEOPARDY_fromSQL.csv
+encoding: utf-8
+delimiter: ","
