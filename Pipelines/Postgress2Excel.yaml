@@ -1,0 +1,29 @@
+name: Postgress2ExcelTest
+###############################################
+############ Source Configuration #############
+###############################################
+source:
+  connection_name: Dev_PostGress_Test
+  query: select * from testschema.testtable
+###############################################
+######## Transformation Configuration #########
+###############################################
+transformations:
+  - type: add_timestamp
+    column_name: created_at
+  - type: clean_column_names
+  - type: format_column_names
+    format_type: upper
+###############################################
+######## Metadata Configuration ########
+###############################################
+add_metadata: true
+###############################################
+############ Target Configuration #############
+###############################################
+target:
+  connection_name: Dev_Excel_WineMag_from_SQL
+  action: replace
+  sheet_name: testsheet99
+  start_column: C
+  start_row: 5
