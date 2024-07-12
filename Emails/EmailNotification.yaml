@@ -1,5 +1,0 @@
-from: "youremail@example.com"
-to: "alert@example.com"
-smtp_server: "smtp.example.com"
-smtp_port: 587
-password: "yourpassword"

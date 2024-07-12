@@ -1,64 +1,59 @@
+#start of pipelines.py
 import os
 import pandas as pd
 import yaml
-from datetime import datetime
 from typing import Dict, List, Any
-import logging
 import argparse
-import re
-
-from utilities import (
-    log_start_step, log_end_step, log_info, log_warning, log_error,
-    UtilityLoader, run_dbt_if_configured, send_email_if_configured
-)
-
+from file_connectors import CSVHandler, ExcelHandler
 from database_connectors import DatabaseConnector
+from utilities import logger
+
 
 class ConfigLoader:
     def __init__(self, connections_folder: str):
         self.connections_folder = connections_folder
         self.connections = self.load_connections()
-        log_info(f"Loaded connections: {self.connections.keys()}")
+        logger.info(f"Loaded connections: {self.connections.keys()}")
 
     def load_connections(self) -> Dict[str, Any]:
         connections = {}
-        log_info(f"Loading connections from folder: {self.connections_folder}")
+        logger.info(f"Loading connections from folder: {self.connections_folder}")
         
         if not os.path.exists(self.connections_folder):
-            log_error(f"Connections folder does not exist: {self.connections_folder}")
+            logger.error(f"Connections folder does not exist: {self.connections_folder}")
             return connections
 
         folder_contents = os.listdir(self.connections_folder)
-        log_info(f"Contents of {self.connections_folder}: {folder_contents}")
+        logger.info(f"Contents of {self.connections_folder}: {folder_contents}")
 
         for filename in folder_contents:
             file_path = os.path.join(self.connections_folder, filename)
-            log_info(f"Checking file: {file_path}")
+            logger.info(f"Checking file: {file_path}")
             
             if filename.endswith('.yaml'):
                 try:
                     with open(file_path, 'r') as file:
                         file_content = file.read()
-                        log_info(f"File content of {filename}:\n{file_content}")
+                        logger.info(f"File content of {filename}:\n{file_content}")
                         connection_config = yaml.safe_load(file_content)
-                        log_info(f"Loaded connection config: {connection_config}")
+                        logger.info(f"Loaded connection config: {connection_config}")
                         if 'name' not in connection_config:
-                            log_error(f"Connection configuration in {filename} is missing 'name' key")
+                            logger.error(f"Connection configuration in {filename} is missing 'name' key")
                             continue
                         connections[connection_config['name']] = connection_config
                 except yaml.YAMLError as e:
-                    log_error(f"Error parsing YAML file {file_path}: {e}")
+                    logger.error(f"Error parsing YAML file {file_path}: {e}")
                 except Exception as e:
-                    log_error(f"Error loading connection config {file_path}: {e}")
+                    logger.error(f"Error loading connection config {file_path}: {e}")
             else:
-                log_info(f"Skipping non-YAML file: {filename}")
+                logger.info(f"Skipping non-YAML file: {filename}")
 
-        log_info(f"Completed loading connections. Total connections loaded: {len(connections)}")
+        logger.info(f"Completed loading connections. Total connections loaded: {len(connections)}")
         return connections
 
     def get_config_by_name(self, connector_name: str) -> Dict[str, Any]:
         if connector_name not in self.connections:
-            log_error(f"Connection {connector_name} not found. Available connections: {list(self.connections.keys())}")
+            logger.error(f"Connection {connector_name} not found. Available connections: {list(self.connections.keys())}")
             raise ValueError(f"Connection {connector_name} not found")
         return self.connections[connector_name]
 
@@ -67,7 +62,6 @@ class Pipeline:
         self.config = config
         self.validate_config()
         self.config_loader = ConfigLoader(connections_folder)
-        self.utility_loader = UtilityLoader(utilities_folder)
         
         self.setup_source()
         self.setup_target()
@@ -82,7 +76,7 @@ class Pipeline:
         source_config = self.config['source']
         self.source_connection_name = source_config['connection_name']
         self.source_query = source_config.get('query')
-        log_info(f"Setting up source connection: {self.source_connection_name}")
+        logger.info(f"Setting up source connection: {self.source_connection_name}")
 
     def setup_target(self):
         target_config = self.config['target']
@@ -102,44 +96,43 @@ class Pipeline:
             self.start_column = target_config.get('start_column')
             self.start_row = target_config.get('start_row')
 
-        log_info(f"Setting up target connection: {self.target_connection_name}, action: {self.target_action}, schema: {self.target_schema_name}, table: {self.target_table_name}")
+        logger.info(f"Setting up target connection: {self.target_connection_name}, action: {self.target_action}, schema: {self.target_schema_name}, table: {self.target_table_name}")
 
     def run(self):
         try:
-            log_start_step(f"Pipeline run: {self.config['name']}")
+            logger.info(f"Pipeline run: {self.config['name']}")
             source_data = self.read_source()
-            log_info("Data read from source")
+            logger.info("Data read from source")
 
             transformed_data = self.transform(source_data)
-            log_info("Data transformed")
+            logger.info("Data transformed")
 
             self.write_target(transformed_data)
-            log_info("Data written to target")
+            logger.info("Data written to target")
 
-            log_end_step(f"Pipeline run: {self.config['name']}")
-            run_dbt_if_configured(self.config, self.utility_loader)
+            logger.info(f"Pipeline run: {self.config['name']}")
         except Exception as e:
             self.handle_error("Pipeline run failed", e)
 
     def read_source(self) -> pd.DataFrame:
-        log_start_step("Reading source data")
+        logger.info("Reading source data")
         try:
             source_config = self.config_loader.get_config_by_name(self.source_connection_name)
         except ValueError as e:
-            log_error(f"Source connection error: {e}")
+            logger.error(f"Source connection error: {e}")
             raise
         
         source_connector = DatabaseConnector.get_connector(source_config['type'], source_config)
         df = source_connector.read(self.source_query) if self.source_query else source_connector.read()
-        log_end_step("Reading source data")
+        logger.info("Reading source data")
         return df
 
     def write_target(self, df: pd.DataFrame):
-        log_start_step("Writing target data")
+        logger.info("Writing target data")
         try:
             target_config = self.config_loader.get_config_by_name(self.target_connection_name)
         except ValueError as e:
-            log_error(f"Target connection error: {e}")
+            logger.error(f"Target connection error: {e}")
             raise
 
         target_connector = DatabaseConnector.get_connector(target_config['type'], target_config)
@@ -161,90 +154,13 @@ class Pipeline:
             else:
                 raise ValueError(f"Unsupported action: {action}")
 
-        log_end_step("Writing target data")
+        logger.info("Writing target data")
 
     def handle_error(self, error_type: str, error: Exception):
-        log_error(f"{error_type}: {error}")
-        send_email_if_configured(self.config, self.utility_loader, f"Pipeline Failure Alert - {error_type}", f"{error_type} in pipeline {self.config['name']}: {error}")
+        logger.error(f"{error_type}: {error}")
+        
 
-    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        log_start_step("Data transformation")
-        for transformation in self.config.get('transformations', []):
-            df = self.apply_transformation(df, transformation)
-
-        if self.config.get('add_metadata', False):
-            self.add_metadata_columns(df)
-            
-        log_end_step("Data transformation")
-        return df
-
-    def apply_transformation(self, df: pd.DataFrame, transformation: Dict[str, Any]) -> pd.DataFrame:
-        transformation_type = transformation['type']
-        log_info(f"Applying transformation: {transformation_type}")
-
-        if transformation_type == 'add_timestamp':
-            df[transformation['column_name']] = datetime.now()
-            log_info(f"Added timestamp to column: {transformation['column_name']}")
-        elif transformation_type == 'rename_column':
-            df = df.rename(columns={transformation['old_name']: transformation['new_name']})
-            log_info(f"Renamed column from {transformation['old_name']} to {transformation['new_name']}")
-        elif transformation_type == 'standardize_phone':
-            df[transformation['column_name']] = df[transformation['column_name']].apply(self.standardize_phone)
-            log_info(f"Standardized phone numbers in column: {transformation['column_name']}")
-        elif transformation_type == 'calculate_value':
-            df[transformation['new_column']] = df.eval(transformation['formula'])
-            log_info(f"Calculated new column: {transformation['new_column']}")
-        elif transformation_type == 'clean_column_names':
-            df.columns = self.clean_column_names(df.columns)
-            log_info("Cleaned column names")
-        elif transformation_type == 'format_column_names':
-            format_type = transformation['format_type']
-            df.columns = self.format_column_names(df.columns, format_type)
-            log_info(f"Formatted column names to {format_type}")
-        return df
-
-    def clean_column_names(self, columns: pd.Index) -> pd.Index:
-        clean_columns = [re.sub(r'\W+', '_', col).strip('_') for col in columns]
-        clean_columns = [re.sub(r'_+', '_', col) for col in clean_columns]
-        return pd.Index(clean_columns)
-
-    def format_column_names(self, columns: pd.Index, format_type: str) -> pd.Index:
-        if format_type == 'camel_case':
-            return pd.Index([self.to_camel_case(col) for col in columns])
-        elif format_type == 'all_caps':
-            return pd.Index([col.upper() for col in columns])
-        elif format_type == 'all_lower':
-            return pd.Index([col.lower() for col in columns])
-        return columns
-
-    def to_camel_case(self, s: str) -> str:
-        parts = s.split('_')
-        return parts[0].lower() + ''.join(word.capitalize() for word in parts[1:])
-
-    def standardize_phone(self, phone: str) -> str:
-        standardized_phone = ''.join(filter(str.isdigit, str(phone)))
-        return standardized_phone
-
-    def add_metadata_columns(self, df: pd.DataFrame):
-        source_conn = self.config_loader.get_config_by_name(self.source_connection_name)
-        df['source_connector_name'] = self.source_connection_name
-        df['source_connector_type'] = source_conn['type']
-        log_info(f"Added metadata columns: source_connector_name, source_connector_type")
-
-        if source_conn['type'] == 'MS SQL Server':
-            df['database'] = source_conn.get('database')
-            df['schema'] = source_conn.get('schema')
-            log_info(f"Added metadata columns: database, schema")
-        elif source_conn['type'] == 'Excel':
-            df['sheet_name'] = source_conn.get('sheet_name')
-            log_info(f"Added metadata column: sheet_name")
-        elif source_conn['type'] in ['CSV', 'Excel']:
-            df['table_name'] = self.target_table_name
-            log_info(f"Added metadata column: table_name")
-
-        df['pipeline_run_timestamp'] = datetime.now()
-        log_info(f"Added metadata column: pipeline_run_timestamp")
-
+    
 class PipelineManager:
     def __init__(self, pipeline_folder: str, schedules_folder: str, connections_folder: str, utilities_folder: str):
         self.pipeline_folder = pipeline_folder
@@ -262,15 +178,15 @@ class PipelineManager:
                     with open(file_path, 'r') as file:
                         pipeline_config = yaml.safe_load(file)
                         if 'name' not in pipeline_config:
-                            log_error(f"Pipeline configuration in {filename} is missing 'name' key")
+                            logger.error(f"Pipeline configuration in {filename} is missing 'name' key")
                             continue
                         if pipeline_config.get('enabled', True):
                             self.pipelines[pipeline_config['name']] = pipeline_config
-                            log_info(f"Loaded pipeline configuration for {pipeline_config['name']}")
+                            logger.info(f"Loaded pipeline configuration for {pipeline_config['name']}")
                 except yaml.YAMLError as e:
-                    log_error(f"Error parsing YAML file {file_path}: {e}")
+                    logger.error(f"Error parsing YAML file {file_path}: {e}")
                 except Exception as e:
-                    log_error(f"Error loading pipeline config {file_path}: {e}")
+                    logger.error(f"Error loading pipeline config {file_path}: {e}")
 
     def run_pipeline(self, pipeline_name: str):
         if pipeline_name in self.pipelines:
@@ -278,7 +194,7 @@ class PipelineManager:
             pipeline = Pipeline(pipeline_config, self.connections_folder, self.utilities_folder)
             pipeline.run()
         else:
-            log_error(f"Pipeline {pipeline_name} not found")
+            logger.error(f"Pipeline {pipeline_name} not found")
 
     def list_pipelines(self) -> List[str]:
         return list(self.pipelines.keys())
@@ -296,13 +212,13 @@ class PipelineManager:
                         if pipeline_name in self.pipelines:
                             self.run_pipeline(pipeline_name)
                         else:
-                            log_error(f"Pipeline {pipeline_name} in schedule {schedule_name} not found")
+                            logger.error(f"Pipeline {pipeline_name} in schedule {schedule_name} not found")
             except yaml.YAMLError as e:
-                log_error(f"Error parsing YAML file {schedule_path}: {e}")
+                logger.error(f"Error parsing YAML file {schedule_path}: {e}")
             except Exception as e:
-                log_error(f"Error loading schedule config {schedule_path}: {e}")
+                logger.error(f"Error loading schedule config {schedule_path}: {e}")
         else:
-            log_error(f"Schedule {schedule_name} not found")
+            logger.error(f"Schedule {schedule_name} not found")
 
     def run_schedules(self):
         for schedule_name in os.listdir(self.schedules_folder):
@@ -324,35 +240,37 @@ if __name__ == "__main__":
     schedules_folder = os.path.join(base_dir, 'Schedules')
     utilities_folder = os.path.join(base_dir, 'Utilities')
 
-    log_info(f"Current directory: {current_dir}")
-    log_info(f"Base directory: {base_dir}")
-    log_info(f"Pipelines folder: {pipelines_folder}")
-    log_info(f"Connections folder: {connections_folder}")
-    log_info(f"Schedules folder: {schedules_folder}")
-    log_info(f"Utilities folder: {utilities_folder}")
+    logger.info(f"Current directory: {current_dir}")
+    logger.info(f"Base directory: {base_dir}")
+    logger.info(f"Pipelines folder: {pipelines_folder}")
+    logger.info(f"Connections folder: {connections_folder}")
+    logger.info(f"Schedules folder: {schedules_folder}")
+    logger.info(f"Utilities folder: {utilities_folder}")
 
     for folder in [pipelines_folder, connections_folder, schedules_folder, utilities_folder]:
         if os.path.exists(folder):
-            log_info(f"{os.path.basename(folder)} folder exists. Contents:")
+            logger.info(f"{os.path.basename(folder)} folder exists. Contents:")
             for file in os.listdir(folder):
                 file_path = os.path.join(folder, file)
                 if file.endswith('.yaml'):
                     try:
                         with open(file_path, 'r') as yaml_file:
-                            log_info(f"  YAML file found: {file}")
-                            log_info(f"  Contents of {file}:\n{yaml_file.read()}")
+                            logger.info(f"  YAML file found: {file}")
+                            logger.info(f"  Contents of {file}:\n{yaml_file.read()}")
                     except Exception as e:
-                        log_error(f"  Error reading {file}: {str(e)}")
+                        logger.error(f"  Error reading {file}: {str(e)}")
                 else:
-                    log_info(f"  Non-YAML file: {file}")
+                    logger.info(f"  Non-YAML file: {file}")
         else:
-            log_error(f"{os.path.basename(folder)} folder does not exist: {folder}")
+            logger.error(f"{os.path.basename(folder)} folder does not exist: {folder}")
 
     try:
         manager = PipelineManager(pipelines_folder, schedules_folder, connections_folder, utilities_folder)
         manager.run_pipeline(pipeline_name)
     except Exception as e:
-        log_error(f"Error running pipeline {pipeline_name}: {str(e)}")
+        logger.error(f"Error running pipeline {pipeline_name}: {str(e)}")
         raise
 
-    log_info("Script execution completed.")
+    logger.info("Script execution completed.")
+
+#end of pipelines.py

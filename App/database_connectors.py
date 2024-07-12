@@ -1,86 +1,208 @@
-from base_connectors import BaseConnector
-from file_connectors import ExcelConnector, CSVConnector
-from sql_connectors import (PostgreSQLConnector, MySQLConnector, RedshiftConnector, 
-                            MSSQLConnector, OracleConnector, SQLiteConnector, ODBCConnector)
+#start of database_connectors.py
 import pandas as pd
-import logging
-from typing import Dict, Any, Optional
+import psycopg2
+from psycopg2 import sql
 
-logger = logging.getLogger(__name__)
+class PostgresSQLHandler:
+    def __init__(self, dbname, user, password, host, port):
+        self.dbname = dbname
+        self.user = user
+        self.password = password
+        self.host = host
+        self.port = port
 
-class DatabaseConnector:
-    CONNECTOR_MAP = {
-        'Excel': ExcelConnector,
-        'CSV': CSVConnector,
-        'PostgreSQL': PostgreSQLConnector,
-        'MySQL': MySQLConnector,
-        'Redshift': RedshiftConnector,
-        'MSSQL': MSSQLConnector,
-        'Oracle': OracleConnector,
-        'SQLite': SQLiteConnector,
-        'ODBC': ODBCConnector
-    }
+    def _connect(self):
+        return psycopg2.connect(
+            dbname=self.dbname,
+            user=self.user,
+            password=self.password,
+            host=self.host,
+            port=self.port
+        )
 
-    @staticmethod
-    def get_connector(connector_type: str, config: Dict[str, Any]) -> BaseConnector:
-        connector_class = DatabaseConnector.CONNECTOR_MAP.get(connector_type)
-        if not connector_class:
-            raise ValueError(f"Unsupported connector type: {connector_type}")
-        return connector_class(config)
+    def read_data(self, schema, table):
+        query = sql.SQL("SELECT * FROM {}.{}").format(
+            sql.Identifier(schema),
+            sql.Identifier(table)
+        )
+        conn = self._connect()
+        df = pd.read_sql(query, conn)
+        conn.close()
+        return df
 
-    @staticmethod
-    def read(connector_type: str, config: Dict[str, Any], query: Optional[str] = None) -> pd.DataFrame:
+    def write_data(self, data, schema, table, mode='append'):
+        conn = self._connect()
+        cursor = conn.cursor()
+        # Create table if it does not exist
+        create_table_query = sql.SQL("""
+            CREATE TABLE IF NOT EXISTS {}.{} (
+                {} TEXT
+            )
+        """).format(
+            sql.Identifier(schema),
+            sql.Identifier(table),
+            sql.Identifier("dummy_column")
+        )
+        cursor.execute(create_table_query)
+        conn.commit()
+
+        # Remove the dummy_column after creation
+        cursor.execute(sql.SQL("ALTER TABLE {}.{} DROP COLUMN IF EXISTS {}").format(
+            sql.Identifier(schema),
+            sql.Identifier(table),
+            sql.Identifier("dummy_column")
+        ))
+        conn.commit()
+
+        if mode == 'append':
+            data.to_sql(table, conn, schema=schema, if_exists='append', index=False)
+        elif mode == 'replace':
+            data.to_sql(table, conn, schema=schema, if_exists='replace', index=False)
+
+        cursor.close()
+        conn.close()
+
+    def truncate_table(self, schema, table):
+        conn = self._connect()
+        cursor = conn.cursor()
+        truncate_query = sql.SQL("TRUNCATE TABLE {}.{}").format(
+            sql.Identifier(schema),
+            sql.Identifier(table)
+        )
+        cursor.execute(truncate_query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+    def drop_table(self, schema, table):
+        conn = self._connect()
+        cursor = conn.cursor()
+        drop_query = sql.SQL("DROP TABLE IF EXISTS {}.{}").format(
+            sql.Identifier(schema),
+            sql.Identifier(table)
+        )
+        cursor.execute(drop_query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+    def append_data(self, data, schema, table):
+        self.write_data(data, schema, table, mode='append')
+
+    def truncate_and_load(self, data, schema, table):
+        self.truncate_table(schema, table)
+        self.write_data(data, schema, table, mode='replace')
+
+    def drop_and_load(self, data, schema, table):
+        self.drop_table(schema, table)
+        self.write_data(data, schema, table, mode='replace')
+
+class MSSQLHandler:
+    def __init__(self, server, database, username, password, driver='{ODBC Driver 17 for SQL Server}'):
+        self.server = server
+        self.database = database
+        self.username = username
+        self.password = password
+        self.driver = driver
+
+    def _connect(self):
+        conn_str = f"""
+        DRIVER={self.driver};
+        SERVER={self.server};
+        DATABASE={self.database};
+        UID={self.username};
+        PWD={self.password};
         """
-        Read data from the specified connector.
+        return pyodbc.connect(conn_str)
 
-        :param connector_type: Type of the connector (e.g., 'PostgreSQL', 'CSV')
-        :param config: Configuration dictionary for the connector
-        :param query: SQL query to execute (for SQL-based connectors)
-        :return: pandas DataFrame with the query results
-        """
-        connector = DatabaseConnector.get_connector(connector_type, config)
-        return connector.read(query)
+    def read_data(self, schema, table):
+        query = f"SELECT * FROM {schema}.{table}"
+        conn = self._connect()
+        df = pd.read_sql(query, conn)
+        conn.close()
+        return df
 
-    @staticmethod
-    def append(connector_type: str, config: Dict[str, Any], df: pd.DataFrame, table_name: str) -> None:
-        """
-        Append data to an existing table.
+    def write_data(self, data, schema, table, mode='append'):
+        conn = self._connect()
+        cursor = conn.cursor()
+        
+        # Create table if it does not exist
+        if not self._table_exists(conn, schema, table):
+            create_table_query = f"""
+            CREATE TABLE {schema}.{table} (
+                {', '.join([f'[{col}] NVARCHAR(MAX)' for col in data.columns])}
+            )
+            """
+            cursor.execute(create_table_query)
+            conn.commit()
 
-        :param connector_type: Type of the connector
-        :param config: Configuration dictionary for the connector
-        :param df: pandas DataFrame to append
-        :param table_name: Name of the target table
-        """
-        connector = DatabaseConnector.get_connector(connector_type, config)
-        connector.write(df, table_name, mode='append')
-        logger.info(f"Successfully appended data to {table_name} table.")
+        if mode == 'append':
+            self._insert_data(conn, data, schema, table)
+        elif mode == 'replace':
+            self._drop_table(conn, schema, table)
+            create_table_query = f"""
+            CREATE TABLE {schema}.{table} (
+                {', '.join([f'[{col}] NVARCHAR(MAX)' for col in data.columns])}
+            )
+            """
+            cursor.execute(create_table_query)
+            conn.commit()
+            self._insert_data(conn, data, schema, table)
 
-    @staticmethod
-    def truncate_and_load(connector_type: str, config: Dict[str, Any], df: pd.DataFrame, table_name: str) -> None:
-        """
-        Truncate an existing table and load new data.
+        cursor.close()
+        conn.close()
 
-        :param connector_type: Type of the connector
-        :param config: Configuration dictionary for the connector
-        :param df: pandas DataFrame to load
-        :param table_name: Name of the target table
+    def _table_exists(self, conn, schema, table):
+        query = f"""
+        SELECT COUNT(*)
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{table}'
         """
-        connector = DatabaseConnector.get_connector(connector_type, config)
-        connector.truncate_table(table_name)
-        connector.write(df, table_name, mode='append')
-        logger.info(f"Successfully truncated and loaded data to {table_name} table.")
+        cursor = conn.cursor()
+        cursor.execute(query)
+        exists = cursor.fetchone()[0] == 1
+        cursor.close()
+        return exists
 
-    @staticmethod
-    def drop_and_load(connector_type: str, config: Dict[str, Any], df: pd.DataFrame, table_name: str) -> None:
-        """
-        Drop an existing table and create a new one with the provided data.
+    def _insert_data(self, conn, data, schema, table):
+        cursor = conn.cursor()
+        columns = ', '.join([f'[{col}]' for col in data.columns])
+        placeholders = ', '.join(['?' for _ in data.columns])
+        insert_query = f"INSERT INTO {schema}.{table} ({columns}) VALUES ({placeholders})"
+        
+        for row in data.itertuples(index=False, name=None):
+            cursor.execute(insert_query, row)
+        
+        conn.commit()
+        cursor.close()
 
-        :param connector_type: Type of the connector
-        :param config: Configuration dictionary for the connector
-        :param df: pandas DataFrame to load
-        :param table_name: Name of the target table
-        """
-        connector = DatabaseConnector.get_connector(connector_type, config)
-        connector.drop_table(table_name)
-        connector.write(df, table_name, mode='replace')
-        logger.info(f"Successfully dropped and recreated {table_name} table with new data.")
+    def truncate_table(self, schema, table):
+        conn = self._connect()
+        cursor = conn.cursor()
+        truncate_query = f"TRUNCATE TABLE {schema}.{table}"
+        cursor.execute(truncate_query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+    def drop_table(self, schema, table):
+        conn = self._connect()
+        cursor = conn.cursor()
+        drop_query = f"DROP TABLE IF EXISTS {schema}.{table}"
+        cursor.execute(drop_query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+    def append_data(self, data, schema, table):
+        self.write_data(data, schema, table, mode='append')
+
+    def truncate_and_load(self, data, schema, table):
+        self.truncate_table(schema, table)
+        self.write_data(data, schema, table, mode='replace')
+
+    def drop_and_load(self, data, schema, table):
+        self.drop_table(schema, table)
+        self.write_data(data, schema, table, mode='replace')
+
+#end of database_connectors.py
