@@ -1,0 +1,9 @@
+name: Dev_MSSQL_Test
+type: MSSQL
+user: SA
+password: YourStrongPassword123!
+host: 127.0.0.1
+dbname: testdatabase
+schema: dbo
+encrypt: yes
+port: 1433 

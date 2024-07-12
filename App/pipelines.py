@@ -12,7 +12,7 @@ from utilities import (
     UtilityLoader, run_dbt_if_configured, send_email_if_configured
 )
 
-from connectors import DatabaseConnector
+from database_connectors import DatabaseConnector
 
 class ConfigLoader:
     def __init__(self, connections_folder: str):
