@@ -1,9 +1,12 @@
+############# Basic Info #################
 name: Dev_MSSQL_Test
 type: MSSQL
-user: SA
+############# Credentials ################
+username: SA
 password: YourStrongPassword123!
-host: 127.0.0.1
-dbname: testdatabase
+############# Connection ################
+server: 127.0.0.1
+database: testdatabase
 schema: dbo
 encrypt: yes
-port: 1433 
+

@@ -1,0 +1,1 @@
+SELECT Count(1) From testdatabase.dbo.testcsvtable

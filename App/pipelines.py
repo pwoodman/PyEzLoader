@@ -1,13 +1,12 @@
-#start of pipelines.py
 import os
 import pandas as pd
 import yaml
 from typing import Dict, List, Any
 import argparse
 from file_connectors import CSVHandler, ExcelHandler
-from database_connectors import DatabaseConnector
+from database_connectors import PostgresSQLHandler, MSSQLHandler
 from utilities import logger
-
+from transformations import apply_transformation, transform
 
 class ConfigLoader:
     def __init__(self, connections_folder: str):
@@ -23,32 +22,20 @@ class ConfigLoader:
             logger.error(f"Connections folder does not exist: {self.connections_folder}")
             return connections
 
-        folder_contents = os.listdir(self.connections_folder)
-        logger.info(f"Contents of {self.connections_folder}: {folder_contents}")
-
-        for filename in folder_contents:
-            file_path = os.path.join(self.connections_folder, filename)
-            logger.info(f"Checking file: {file_path}")
-            
+        for filename in os.listdir(self.connections_folder):
             if filename.endswith('.yaml'):
+                file_path = os.path.join(self.connections_folder, filename)
                 try:
                     with open(file_path, 'r') as file:
-                        file_content = file.read()
-                        logger.info(f"File content of {filename}:\n{file_content}")
-                        connection_config = yaml.safe_load(file_content)
-                        logger.info(f"Loaded connection config: {connection_config}")
+                        connection_config = yaml.safe_load(file)
                         if 'name' not in connection_config:
                             logger.error(f"Connection configuration in {filename} is missing 'name' key")
                             continue
                         connections[connection_config['name']] = connection_config
-                except yaml.YAMLError as e:
-                    logger.error(f"Error parsing YAML file {file_path}: {e}")
+                        logger.info(f"Loaded connection config: {connection_config['name']}")
                 except Exception as e:
                     logger.error(f"Error loading connection config {file_path}: {e}")
-            else:
-                logger.info(f"Skipping non-YAML file: {filename}")
 
-        logger.info(f"Completed loading connections. Total connections loaded: {len(connections)}")
         return connections
 
     def get_config_by_name(self, connector_name: str) -> Dict[str, Any]:
@@ -60,11 +47,19 @@ class ConfigLoader:
 class Pipeline:
     def __init__(self, config: Dict[str, Any], connections_folder: str, utilities_folder: str):
         self.config = config
+        self.connections_folder = connections_folder
+        self.utilities_folder = utilities_folder
         self.validate_config()
         self.config_loader = ConfigLoader(connections_folder)
         
         self.setup_source()
         self.setup_target()
+        self.status = {
+            "success": True,
+            "errors": [],
+            "source_rows": 0,
+            "target_rows": 0,
+        }
 
     def validate_config(self):
         required_keys = ['name', 'source', 'target', 'transformations']
@@ -84,7 +79,6 @@ class Pipeline:
         self.target_action = target_config['action']
         self.target_schema_name = target_config.get('schema_name')
         
-        # Only require table_name for non-file based connectors
         connector_type = self.config_loader.get_config_by_name(self.target_connection_name)['type']
         if connector_type not in ['CSV', 'Excel']:
             if 'table_name' not in target_config:
@@ -93,8 +87,8 @@ class Pipeline:
         else:
             self.target_table_name = None
             self.sheet_name = target_config.get('sheet_name')
-            self.start_column = target_config.get('start_column')
-            self.start_row = target_config.get('start_row')
+            self.header_start_row = target_config.get('header_start_row', 0)
+            self.column_start_row = target_config.get('column_start_row', 'A')
 
         logger.info(f"Setting up target connection: {self.target_connection_name}, action: {self.target_action}, schema: {self.target_schema_name}, table: {self.target_table_name}")
 
@@ -102,65 +96,117 @@ class Pipeline:
         try:
             logger.info(f"Pipeline run: {self.config['name']}")
             source_data = self.read_source()
-            logger.info("Data read from source")
+            self.status["source_rows"] = len(source_data)
+            logger.info(f"Data read from source. Rows: {self.status['source_rows']}")
 
-            transformed_data = self.transform(source_data)
+            transformed_data = transform(source_data, self.config.get('transformations', []))
             logger.info("Data transformed")
 
             self.write_target(transformed_data)
-            logger.info("Data written to target")
-
-            logger.info(f"Pipeline run: {self.config['name']}")
+            
+            if self.status["success"]:
+                logger.info(f"Pipeline run completed successfully: {self.config['name']}")
+            else:
+                logger.error(f"Pipeline run failed: {self.config['name']}")
         except Exception as e:
             self.handle_error("Pipeline run failed", e)
 
-    def read_source(self) -> pd.DataFrame:
-        logger.info("Reading source data")
-        try:
-            source_config = self.config_loader.get_config_by_name(self.source_connection_name)
-        except ValueError as e:
-            logger.error(f"Source connection error: {e}")
-            raise
-        
-        source_connector = DatabaseConnector.get_connector(source_config['type'], source_config)
-        df = source_connector.read(self.source_query) if self.source_query else source_connector.read()
-        logger.info("Reading source data")
-        return df
+        self.log_summary()
 
     def write_target(self, df: pd.DataFrame):
         logger.info("Writing target data")
         try:
             target_config = self.config_loader.get_config_by_name(self.target_connection_name)
-        except ValueError as e:
-            logger.error(f"Target connection error: {e}")
-            raise
+            target_connector = self.get_connector(target_config['type'], target_config)
+            action = self.target_action
+            schema_name = self.target_schema_name
+            table_name = self.target_table_name
 
-        target_connector = DatabaseConnector.get_connector(target_config['type'], target_config)
-        action = self.target_action
-        schema_name = self.target_schema_name
-        table_name = self.target_table_name
-
-        if target_config['type'] in ['CSV', 'Excel']:
-            target_connector.write(df, table_name, mode=action, sheet_name=self.sheet_name, start_column=self.start_column, start_row=self.start_row)
-        else:
-            if action == 'append':
-                target_connector.write(df, table_name, mode='append', schema=schema_name)
-            elif action == 'truncate_and_load':
-                target_connector.truncate_table(table_name, schema=schema_name)
-                target_connector.write(df, table_name, mode='append', schema=schema_name)
-            elif action == 'drop_and_load':
-                target_connector.drop_table(table_name, schema=schema_name)
-                target_connector.write(df, table_name, mode='replace', schema=schema_name)
+            if target_config['type'] in ['CSV', 'Excel']:
+                target_connector.write_data(df, mode=action)
             else:
-                raise ValueError(f"Unsupported action: {action}")
+                if action == 'append':
+                    target_connector.write_data(df, schema_name, table_name, mode='append')
+                elif action == 'truncate_and_load':
+                    if hasattr(target_connector, '_table_exists') and not target_connector._table_exists(target_connector._connect(), schema_name, table_name):
+                        logger.info(f"Table {schema_name}.{table_name} does not exist. Creating it.")
+                        target_connector.write_data(df, schema_name, table_name, mode='replace')
+                    else:
+                        target_connector.truncate_table(schema_name, table_name)
+                        target_connector.write_data(df, schema_name, table_name, mode='replace')
+                elif action == 'drop_and_load':
+                    target_connector.drop_table(schema_name, table_name)
+                    target_connector.write_data(df, schema_name, table_name, mode='replace')
+                else:
+                    raise ValueError(f"Unsupported action: {action}")
 
-        logger.info("Writing target data")
+            self.status["target_rows"] = len(df)
+            logger.info(f"Target data written successfully. Rows: {self.status['target_rows']}")
+        except Exception as e:
+            self.handle_error("Error writing target data", e)
+            self.status["target_rows"] = 0
+
+
+
+    def log_summary(self):
+        summary = f"\nPipeline Summary for {self.config['name']}:\n"
+        summary += f"Status: {'Success' if self.status['success'] else 'Failed'}\n"
+        summary += f"Source Rows: {self.status['source_rows']}\n"
+        summary += f"Target Rows: {self.status['target_rows']} {'(Failed to write)' if not self.status['success'] else ''}\n"
+        
+        if self.status["errors"]:
+            summary += "Errors:\n"
+            for error in self.status["errors"]:
+                summary += f"  - {error}\n"
+        
+        logger.info(summary)
+
+    def read_source(self) -> pd.DataFrame:
+        logger.info("Reading source data")
+        try:
+            source_config = self.config_loader.get_config_by_name(self.source_connection_name)
+            source_connector = self.get_connector(source_config['type'], source_config)
+            df = source_connector.read_data(self.source_query) if self.source_query else source_connector.read_data()
+            logger.info(f"Source data read successfully. Rows: {len(df)}")
+            return df
+        except Exception as e:
+            self.handle_error("Error reading source data", e)
+            return pd.DataFrame()
 
     def handle_error(self, error_type: str, error: Exception):
-        logger.error(f"{error_type}: {error}")
-        
+        self.status["success"] = False
+        error_message = f"{error_type}: {str(error)}"
+        self.status["errors"].append(error_message)
+        logger.error(error_message)
 
-    
+    @staticmethod
+    def get_connector(connector_type: str, config: Dict[str, Any]):
+        try:
+            if connector_type == 'PostgresSQL':
+                return PostgresSQLHandler(
+                    dbname=config['dbname'],
+                    user=config['user'],
+                    password=config['password'],
+                    host=config['host'],
+                    port=config['port']
+                )
+            elif connector_type == 'MSSQL':
+                return MSSQLHandler(
+                    server=config['server'],
+                    database=config['database'],
+                    username=config['username'],
+                    password=config['password'],
+                    driver=config.get('driver', '{ODBC Driver 17 for SQL Server}')
+                )
+            elif connector_type == 'CSV':
+                return CSVHandler(config['file_path'], config.get('encoding', 'utf-8'), config.get('delimiter', ','))
+            elif connector_type == 'Excel':
+                return ExcelHandler(config['file_path'], config.get('sheet_name', 'Sheet1'), config.get('header_start_row', 0), config.get('column_start_row', 'A'))
+            else:
+                raise ValueError(f"Unsupported connector type: {connector_type}")
+        except KeyError as e:
+            raise ValueError(f"Missing required configuration for {connector_type}: {str(e)}")
+
 class PipelineManager:
     def __init__(self, pipeline_folder: str, schedules_folder: str, connections_folder: str, utilities_folder: str):
         self.pipeline_folder = pipeline_folder
@@ -225,8 +271,6 @@ class PipelineManager:
             self.run_schedule(schedule_name)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
     parser = argparse.ArgumentParser(description="Run a specified data pipeline.")
     parser.add_argument("pipeline_name", type=str, help="Name of the pipeline to run")
 
@@ -272,5 +316,3 @@ if __name__ == "__main__":
         raise
 
     logger.info("Script execution completed.")
-
-#end of pipelines.py

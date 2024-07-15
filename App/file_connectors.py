@@ -1,35 +1,56 @@
-#start of file_connectors.py
+# file_connectors.py
+
 import pandas as pd
+from openpyxl import load_workbook
 
 class ExcelHandler:
-    def __init__(self, file_path):
+    def __init__(self, file_path: str, sheet_name: str = 'Sheet1', header_start_row: int = 0, column_start_row: str = 'A'):
         self.file_path = file_path
+        self.sheet_name = sheet_name
+        self.header_start_row = header_start_row
+        self.column_start_row = self._ensure_column_is_string(column_start_row)
 
-    def read_data(self, sheet_name=0, start_row=0, start_col=0):
-        df = pd.read_excel(self.file_path, sheet_name=sheet_name, header=None)
-        df = df.iloc[start_row:, start_col:]
+    def _ensure_column_is_string(self, column):
+        if isinstance(column, int):
+            # Convert integer to column letter (e.g., 0 -> 'A', 1 -> 'B', etc.)
+            return chr(ord('A') + column)
+        elif isinstance(column, str):
+            return column.upper()
+        else:
+            raise ValueError("column_start_row must be either an integer or a string")
+
+    def read_data(self) -> pd.DataFrame:
+        column_start_index = self._convert_column_to_index(self.column_start_row)
+        df = pd.read_excel(self.file_path, sheet_name=self.sheet_name, header=None)
+        df = df.iloc[self.header_start_row:, column_start_index:]
         return df
 
-    def write_data(self, data, sheet_name='Sheet1', start_row=0, start_col=0, mode='replace'):
+    def write_data(self, data: pd.DataFrame, mode: str = 'replace'):
         if mode == 'replace':
             with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='w') as writer:
-                data.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=start_row, startcol=start_col)
+                data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
         elif mode == 'append':
             with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                data.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=start_row, startcol=start_col)
+                data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
+
+    def _convert_column_to_index(self, column: str) -> int:
+        column = column.upper()
+        index = 0
+        for i, char in enumerate(reversed(column)):
+            index += (ord(char) - ord('A') + 1) * (26 ** i)
+        return index - 1
 
 class CSVHandler:
-    def __init__(self, file_path):
+    def __init__(self, file_path: str, encoding: str = 'utf-8', delimiter: str = ','):
         self.file_path = file_path
+        self.encoding = encoding
+        self.delimiter = delimiter
 
-    def read_data(self):
-        df = pd.read_csv(self.file_path)
-        return df
+    def read_data(self) -> pd.DataFrame:
+        return pd.read_csv(self.file_path, encoding=self.encoding, delimiter=self.delimiter)
 
-    def write_data(self, data, mode='replace'):
+    def write_data(self, data: pd.DataFrame, mode: str = 'replace'):
         if mode == 'replace':
-            data.to_csv(self.file_path, index=False)
+            data.to_csv(self.file_path, index=False, encoding=self.encoding, sep=self.delimiter)
         elif mode == 'append':
-            data.to_csv(self.file_path, mode='a', header=False, index=False)
-
-#end of file_connectors.py
+            data.to_csv(self.file_path, mode='a', header=False, index=False, encoding=self.encoding, sep=self.delimiter)

@@ -1,8 +1,8 @@
-############## Basic Configuration ############
-name: CSV2MSSQLTest
+name: Excel2mssqlTest_A
+Active: True
 ############ Source Configuration #############
 source:
-  connection_name: Dev_CSV_Jeopardy
+  connection_name: Dev_Excel_WineMag
 ######## Transformation Configuration #########
 transformations:
   - type: add_timestamp
@@ -10,6 +10,6 @@ transformations:
 ############ Target Configuration #############
 target:
   connection_name: Dev_MSSQL_Test
-  action: drop_and_load
-  schema_name: dbo
-  table_name: testcsvtable
+  action: append
+  schema_name: testschema
+  table_name: testtable

@@ -1,16 +1,17 @@
-#start of utilities.py
+# utilities.py
+
 import logging
 import logging.handlers
 
-def setup_logger(log_file='application.log', level=logging.INFO):
+def setup_logger(log_file: str = 'application.log', level: int = logging.INFO) -> logging.Logger:
     """Function to setup a shared logger for the entire application"""
     
     # Create a logger
-    logger = logging.getLogger('shared_logger')
+    logger = logging.getLogger('Master_Logger')
     logger.setLevel(level)
 
     # Check if logger already has handlers to avoid duplicate logs
-    if not logger.handlers:
+    if not logger.hasHandlers():
         # Create file handler
         file_handler = logging.handlers.TimedRotatingFileHandler(log_file, when='midnight', interval=1)
         file_handler.suffix = "%Y%m%d"
@@ -29,9 +30,10 @@ def setup_logger(log_file='application.log', level=logging.INFO):
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
 
+    # Prevent the root logger from logging messages
+    logger.propagate = False
+
     return logger
 
 # Initialize the shared logger
 logger = setup_logger()
-
-#end of utilities.py
