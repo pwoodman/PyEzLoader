@@ -1,26 +1,18 @@
-name: Postgress2CSVTest
-###############################################
+name: Postgres2CSVTest
 ############ Source Configuration #############
-###############################################
 source:
-  connection_name: Dev_PostGress_Test
+  connection_name: Dev_Postgres_Test
   query: select * from testschema.testcsvtable
-###############################################
 ######## Transformation Configuration #########
-###############################################
 transformations:
   - type: add_timestamp
     column_name: created_at
   - type: clean_column_names
   - type: format_column_names
     format_type: camel_case
-###############################################
 ######## Metadata Configuration ########
-###############################################
 add_metadata: true
-###############################################
 ############ Target Configuration #############
-###############################################
 target:
   connection_name: Dev_CSV_JeopardyFromSQL
   action: replace

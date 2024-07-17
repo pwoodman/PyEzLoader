@@ -1,5 +1,3 @@
-# scheduler.py
-
 import argparse
 import logging
 import multiprocessing as mp
@@ -13,7 +11,7 @@ if __name__ == "__main__":
     parser.add_argument("--run", help="Run a specific pipeline by name")
     args = parser.parse_args()
 
-    pipeline_manager = PipelineManager('Pipelines', 'Schedules', 'Connections', 'Emails')
+    pipeline_manager = PipelineManager('Pipelines', 'Schedules', 'Connections', 'Utilities')
 
     if args.run:
         num_cores = mp.cpu_count() - 1

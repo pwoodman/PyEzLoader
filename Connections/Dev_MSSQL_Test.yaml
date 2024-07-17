@@ -1,6 +1,6 @@
 ############# Basic Info #################
 name: Dev_MSSQL_Test
-type: MSSQL
+type: mssql
 ############# Credentials ################
 username: SA
 password: YourStrongPassword123!

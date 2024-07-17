@@ -1,20 +1,14 @@
-name: Excel2PostgressTest
-###############################################
+name: Excel2PostgresTest
 ############ Source Configuration #############
-###############################################
 source:
   connection_name: Dev_Excel_WineMag
-###############################################
 ######## Transformation Configuration #########
-###############################################
 transformations:
   - type: add_timestamp
     column_name: created_at
-###############################################
 ############ Target Configuration #############
-###############################################
 target:
-  connection_name: Dev_PostGress_Test
+  connection_name: Dev_Postgres_Test
   action: truncate_and_load
   schema_name: testschema
   table_name: testtable

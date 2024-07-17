@@ -1,7 +1,6 @@
-# file_connectors.py
-
 import pandas as pd
 from openpyxl import load_workbook
+import os
 
 class ExcelHandler:
     def __init__(self, file_path: str, sheet_name: str = 'Sheet1', header_start_row: int = 0, column_start_row: str = 'A'):
@@ -9,29 +8,39 @@ class ExcelHandler:
         self.sheet_name = sheet_name
         self.header_start_row = header_start_row
         self.column_start_row = self._ensure_column_is_string(column_start_row)
+        self._validate_file_path(file_path)
 
     def _ensure_column_is_string(self, column):
         if isinstance(column, int):
-            # Convert integer to column letter (e.g., 0 -> 'A', 1 -> 'B', etc.)
             return chr(ord('A') + column)
         elif isinstance(column, str):
             return column.upper()
         else:
             raise ValueError("column_start_row must be either an integer or a string")
 
+    def _validate_file_path(self, file_path):
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+
     def read_data(self) -> pd.DataFrame:
-        column_start_index = self._convert_column_to_index(self.column_start_row)
-        df = pd.read_excel(self.file_path, sheet_name=self.sheet_name, header=None)
-        df = df.iloc[self.header_start_row:, column_start_index:]
-        return df
+        try:
+            column_start_index = self._convert_column_to_index(self.column_start_row)
+            df = pd.read_excel(self.file_path, sheet_name=self.sheet_name, header=None)
+            df = df.iloc[self.header_start_row:, column_start_index:]
+            return df
+        except Exception as e:
+            raise IOError(f"Error reading data from Excel file: {str(e)}")
 
     def write_data(self, data: pd.DataFrame, mode: str = 'replace'):
-        if mode == 'replace':
-            with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='w') as writer:
-                data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
-        elif mode == 'append':
-            with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
+        try:
+            if mode == 'replace':
+                with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='w') as writer:
+                    data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
+            elif mode == 'append':
+                with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                    data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
+        except Exception as e:
+            raise IOError(f"Error writing data to Excel file: {str(e)}")
 
     def _convert_column_to_index(self, column: str) -> int:
         column = column.upper()
@@ -45,12 +54,23 @@ class CSVHandler:
         self.file_path = file_path
         self.encoding = encoding
         self.delimiter = delimiter
+        self._validate_file_path(file_path)
+
+    def _validate_file_path(self, file_path):
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
 
     def read_data(self) -> pd.DataFrame:
-        return pd.read_csv(self.file_path, encoding=self.encoding, delimiter=self.delimiter)
+        try:
+            return pd.read_csv(self.file_path, encoding=self.encoding, delimiter=self.delimiter)
+        except Exception as e:
+            raise IOError(f"Error reading data from CSV file: {str(e)}")
 
     def write_data(self, data: pd.DataFrame, mode: str = 'replace'):
-        if mode == 'replace':
-            data.to_csv(self.file_path, index=False, encoding=self.encoding, sep=self.delimiter)
-        elif mode == 'append':
-            data.to_csv(self.file_path, mode='a', header=False, index=False, encoding=self.encoding, sep=self.delimiter)
+        try:
+            if mode == 'replace':
+                data.to_csv(self.file_path, index=False, encoding=self.encoding, sep=self.delimiter)
+            elif mode == 'append':
+                data.to_csv(self.file_path, mode='a', header=False, index=False, encoding=self.encoding, sep=self.delimiter)
+        except Exception as e:
+            raise IOError(f"Error writing data to CSV file: {str(e)}")

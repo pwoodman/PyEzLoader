@@ -1,4 +1,4 @@
-name: Postgres2ExcelTest
+name: Postgress2MSSQLTest
 ############ Source Configuration #############
 source:
   connection_name: Dev_Postgres_Test
@@ -14,8 +14,7 @@ transformations:
 add_metadata: true
 ############ Target Configuration #############
 target:
-  connection_name: Dev_Excel_WineMag_from_SQL
-  action: replace
-  sheet_name: testsheet99
-  start_column: C
-  start_row: 5
+  connection_name: Dev_MSSQL_Test
+  action: append
+  schema_name: testschema
+  table_name: testtablefrompostgres

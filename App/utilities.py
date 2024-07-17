@@ -1,5 +1,3 @@
-# utilities.py
-
 import logging
 import logging.handlers
 

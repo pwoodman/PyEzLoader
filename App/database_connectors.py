@@ -1,374 +1,137 @@
-# database_connectors.py
-
 import pandas as pd
-import psycopg2
-from psycopg2 import sql
 import pyodbc
+import psycopg2
 from utilities import logger
 
 class DatabaseError(Exception):
+    """Custom exception for database errors."""
     pass
 
-class PostgresSQLHandler:
-    def __init__(self, dbname, user, password, host, port):
-        self.dbname = dbname
-        self.user = user
-        self.password = password
-        self.host = host
-        self.port = port
+class MultiDB:
+    def __init__(self, db_type, connection_string):
+        self.db_type = db_type
+        self.connection_string = connection_string
+        self.conn = self.connect_to_db()
+        self.cursor = self.conn.cursor()
 
-    def _connect(self):
+    def connect_to_db(self):
         try:
-            return psycopg2.connect(
-                dbname=self.dbname,
-                user=self.user,
-                password=self.password,
-                host=self.host,
-                port=self.port
-            )
-        except psycopg2.Error as e:
-            logger.error(f"Failed to connect to PostgreSQL database: {e}")
-            raise DatabaseError(f"Connection failed: {e}")
+            if self.db_type == 'mssql':
+                return pyodbc.connect(self.connection_string)
+            elif self.db_type == 'postgresql':
+                return psycopg2.connect(self.connection_string)
+            else:
+                raise ValueError("Unsupported database type")
+        except (pyodbc.OperationalError, psycopg2.OperationalError) as e:
+            logger.error(f"Operational error while connecting to {self.db_type} database: {str(e)}")
+            raise DatabaseError(f"Operational error: {str(e)}")
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while connecting to {self.db_type} database: {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while connecting to {self.db_type} database: {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")
 
-    def _schema_exists(self, conn, schema):
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM information_schema.schemata
-            WHERE schema_name = %s
-        """, (schema,))
-        exists = cursor.fetchone()[0] > 0
-        cursor.close()
-        return exists
-
-    def _table_exists(self, conn, schema, table):
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM information_schema.tables
-            WHERE table_schema = %s
-            AND table_name = %s
-        """, (schema, table))
-        exists = cursor.fetchone()[0] > 0
-        cursor.close()
-        return exists
-
-    def _create_table(self, conn, schema, table, columns):
-        cursor = conn.cursor()
-        create_table_query = sql.SQL("""
-            CREATE TABLE IF NOT EXISTS {}.{} (
-                {})
-        """).format(
-            sql.Identifier(schema),
-            sql.Identifier(table),
-            sql.SQL(', ').join(sql.SQL("{} TEXT").format(sql.Identifier(col)) for col in columns)
-        )
-        cursor.execute(create_table_query)
-        conn.commit()
-        cursor.close()
-
-    def read_data(self, schema, table):
-        conn = self._connect()
+    def create_table_if_not_exists(self, table_name, columns):
         try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            if not self._table_exists(conn, schema, table):
-                raise DatabaseError(f"Table '{schema}.{table}' does not exist")
-            
-            query = sql.SQL("SELECT * FROM {}.{}").format(
-                sql.Identifier(schema),
-                sql.Identifier(table)
-            )
-            df = pd.read_sql(query, conn)
-            return df
-        finally:
-            conn.close()
+            columns_with_types = ', '.join([f"{col} {dtype}" for col, dtype in columns.items()])
+            if self.db_type == 'mssql':
+                create_table_query = f"""
+                IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='{table_name}' AND xtype='U')
+                CREATE TABLE {table_name} ({columns_with_types});
+                """
+            elif self.db_type == 'postgresql':
+                create_table_query = f"""
+                CREATE TABLE IF NOT EXISTS {table_name} ({columns_with_types});
+                """
+            self.cursor.execute(create_table_query)
+            self.conn.commit()
+            logger.info(f"Table '{table_name}' created if not exists.")
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while creating table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while creating table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")
 
-    def write_data(self, data, schema, table, mode='append'):
-        conn = self._connect()
+    def read_data(self, table_name, conditions=""):
         try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            
-            if not self._table_exists(conn, schema, table):
-                self._create_table(conn, schema, table, data.columns)
-                logger.info(f"Table {schema}.{table} created.")
+            query = f"SELECT * FROM {table_name} {conditions};"
+            self.cursor.execute(query)
+            columns = [desc[0] for desc in self.cursor.description]
+            rows = self.cursor.fetchall()
+            logger.info(f"Data read from table '{table_name}'.")
+            return pd.DataFrame(rows, columns=columns)
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while reading data from table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while reading data from table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")
 
-            if mode == 'append':
-                data.to_sql(table, conn, schema=schema, if_exists='append', index=False)
-            elif mode == 'replace':
-                self.truncate_table(schema, table)
-                data.to_sql(table, conn, schema=schema, if_exists='append', index=False)
-            
-            self._validate_write(conn, schema, table, len(data), mode)
-        finally:
-            conn.close()
-
-    def _validate_write(self, conn, schema, table, expected_rows):
-        cursor = conn.cursor()
-        cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}.{}").format(
-            sql.Identifier(schema),
-            sql.Identifier(table)
-        ))
-        actual_rows = cursor.fetchone()[0]
-        cursor.close()
-        if mode == 'append':
-            logger.info(f"Data written successfully. Rows: {expected_rows}")
-        else:
-            if actual_rows != expected_rows:
-                raise DatabaseError(f"Data write validation failed. Expected {expected_rows} rows, found {actual_rows}")
-
-    def truncate_table(self, schema, table):
-        conn = self._connect()
+    def insert_data(self, table_name, df):
         try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            if not self._table_exists(conn, schema, table):
-                raise DatabaseError(f"Table '{schema}.{table}' does not exist")
-            
-            cursor = conn.cursor()
-            truncate_query = sql.SQL("TRUNCATE TABLE {}.{}").format(
-                sql.Identifier(schema),
-                sql.Identifier(table)
-            )
-            cursor.execute(truncate_query)
-            conn.commit()
-            cursor.close()
-            
-            self._validate_truncate(conn, schema, table)
-        finally:
-            conn.close()
+            data = [tuple(row) for row in df.itertuples(index=False, name=None)]
+            columns = ', '.join(df.columns)
+            placeholders = ', '.join(['%s'] * len(df.columns)) if self.db_type == 'postgresql' else ', '.join(['?'] * len(df.columns))
+            insert_query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+            self.cursor.executemany(insert_query, data)
+            self.conn.commit()
+            logger.info(f"Data inserted into table '{table_name}'.")
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while inserting data into table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while inserting data into table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")
 
-    def _validate_truncate(self, conn, schema, table):
-        cursor = conn.cursor()
-        cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}.{}").format(
-            sql.Identifier(schema),
-            sql.Identifier(table)
-        ))
-        row_count = cursor.fetchone()[0]
-        cursor.close()
-        if row_count != 0:
-            raise DatabaseError(f"Truncate operation failed. Table {schema}.{table} still contains {row_count} rows")
-
-    def drop_table(self, schema, table):
-        conn = self._connect()
+    def delete_data(self, table_name, conditions):
         try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            
-            cursor = conn.cursor()
-            drop_query = sql.SQL("DROP TABLE IF EXISTS {}.{}").format(
-                sql.Identifier(schema),
-                sql.Identifier(table)
-            )
-            cursor.execute(drop_query)
-            conn.commit()
-            cursor.close()
-            
-            self._validate_drop(conn, schema, table)
-        finally:
-            conn.close()
+            delete_query = f"DELETE FROM {table_name} WHERE {conditions};"
+            self.cursor.execute(delete_query)
+            self.conn.commit()
+            logger.info(f"Data deleted from table '{table_name}' where {conditions}.")
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while deleting data from table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while deleting data from table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")
 
-    def _validate_drop(self, conn, schema, table):
-        if self._table_exists(conn, schema, table):
-            raise DatabaseError(f"Drop operation failed. Table {schema}.{table} still exists")
-
-    def append_data(self, data, schema, table):
-        self.write_data(data, schema, table, mode='append')
-
-    def truncate_and_load(self, data, schema, table):
-        self.truncate_table(schema, table)
-        self.write_data(data, schema, table, mode='append')
-
-    def drop_and_load(self, data, schema, table):
-        self.drop_table(schema, table)
-        self.write_data(data, schema, table, mode='append')
-
-
-class MSSQLHandler:
-    def __init__(self, server, database, username, password, driver='{ODBC Driver 17 for SQL Server}'):
-        self.server = server
-        self.database = database
-        self.username = username
-        self.password = password
-        self.driver = driver
-
-    def _connect(self):
+    def truncate_table(self, table_name):
         try:
-            conn_str = f"""
-            DRIVER={self.driver};
-            SERVER={self.server};
-            DATABASE={self.database};
-            UID={self.username};
-            PWD={self.password};
-            """
-            return pyodbc.connect(conn_str)
-        except pyodbc.Error as e:
-            logger.error(f"Failed to connect to MSSQL database: {e}")
-            raise DatabaseError(f"Connection failed: {e}")
+            truncate_query = f"TRUNCATE TABLE {table_name};" if self.db_type == 'mssql' else f"TRUNCATE TABLE {table_name} RESTART IDENTITY;"
+            self.cursor.execute(truncate_query)
+            self.conn.commit()
+            logger.info(f"Table '{table_name}' truncated.")
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while truncating table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while truncating table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")
 
-    def _schema_exists(self, conn, schema):
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM sys.schemas WHERE name = '{schema}'")
-        exists = cursor.fetchone()[0] > 0
-        cursor.close()
-        return exists
-
-    def _table_exists(self, conn, schema, table):
-        cursor = conn.cursor()
-        cursor.execute(f"""
-            SELECT COUNT(*)
-            FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{table}'
-        """)
-        exists = cursor.fetchone()[0] > 0
-        cursor.close()
-        return exists
-
-    def _create_table(self, conn, schema, table, columns):
-        cursor = conn.cursor()
-        create_schema_query = f"""
-        IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{schema}')
-        BEGIN
-            EXEC('CREATE SCHEMA {schema}')
-        END
-        """
-        cursor.execute(create_schema_query)
-        conn.commit()
-
-        create_table_query = f"""
-        CREATE TABLE {schema}.{table} (
-            {', '.join([f'[{col}] NVARCHAR(MAX)' for col in columns])}
-        )
-        """
-        cursor.execute(create_table_query)
-        conn.commit()
-        cursor.close()
-        logger.info(f"Table {schema}.{table} created.")
-
-    def read_data(self, schema, table):
-        conn = self._connect()
+    def handle_dataframe(self, table_name, df, if_exists='append'):
         try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            if not self._table_exists(conn, schema, table):
-                raise DatabaseError(f"Table '{schema}.{table}' does not exist")
-            
-            query = f"SELECT * FROM {schema}.{table}"
-            df = pd.read_sql(query, conn)
-            return df
-        finally:
-            conn.close()
+            if if_exists == 'replace':
+                self.truncate_table(table_name)
+            self.insert_data(table_name, df)
+            logger.info(f"DataFrame handled for table '{table_name}' with if_exists='{if_exists}'.")
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while handling DataFrame for table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while handling DataFrame for table '{table_name}': {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")
 
-    def write_data(self, data, schema, table, mode='append'):
-        conn = self._connect()
+    def close_connection(self):
         try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            
-            if not self._table_exists(conn, schema, table):
-                self._create_table(conn, schema, table, data.columns)
-
-            data = self._clean_data(data)
-
-            if mode == 'append':
-                self._insert_data(conn, data, schema, table)
-            elif mode == 'replace':
-                self.truncate_table(schema, table)
-                self._insert_data(conn, data, schema, table)
-            
-            self._validate_write(conn, schema, table, len(data),mode)
-        finally:
-            conn.close()
-
-    def _clean_data(self, data):
-        data.fillna(value={col: 0 if data[col].dtype.kind in 'biufc' else '' for col in data.columns}, inplace=True)
-        float_columns = data.select_dtypes(include=['float64']).columns
-        data[float_columns] = data[float_columns].round(2)
-        return data
-
-    def _insert_data(self, conn, data, schema, table):
-        cursor = conn.cursor()
-        cursor.fast_executemany = True
-        columns = ', '.join([f'[{col}]' for col in data.columns])
-        placeholders = ', '.join(['?' for _ in data.columns])
-        insert_query = f"INSERT INTO {schema}.{table} ({columns}) VALUES ({placeholders})"
-        
-        batch_size = 1000  # Adjust this based on your data size and available memory
-        for i in range(0, len(data), batch_size):
-            batch = data.iloc[i:i+batch_size].values.tolist()
-            try:
-                cursor.executemany(insert_query, batch)
-                conn.commit()
-            except Exception as e:
-                logger.error(f"Error inserting batch starting at row {i}: {str(e)}")
-        
-        cursor.close()
-
-    def _validate_write(self, conn, schema, table, expected_rows, mode):
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {schema}.{table}")
-        actual_rows = cursor.fetchone()[0]
-        cursor.close()
-        if mode == 'append':
-            logger.info(f"Data written successfully. Rows: {actual_rows}")
-        else:
-            if actual_rows != expected_rows:
-                raise DatabaseError(f"Data write validation failed. Expected {expected_rows} rows, found {actual_rows}")
-
-    def truncate_table(self, schema, table):
-        conn = self._connect()
-        try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            if not self._table_exists(conn, schema, table):
-                raise DatabaseError(f"Table '{schema}.{table}' does not exist")
-            
-            cursor = conn.cursor()
-            truncate_query = f"TRUNCATE TABLE {schema}.{table}"
-            cursor.execute(truncate_query)
-            conn.commit()
-            cursor.close()
-            
-            self._validate_truncate(conn, schema, table)
-        finally:
-            conn.close()
-
-    def _validate_truncate(self, conn, schema, table):
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {schema}.{table}")
-        row_count = cursor.fetchone()[0]
-        cursor.close()
-        if row_count != 0:
-            raise DatabaseError(f"Truncate operation failed. Table {schema}.{table} still contains {row_count} rows")
-
-    def drop_table(self, schema, table):
-        conn = self._connect()
-        try:
-            if not self._schema_exists(conn, schema):
-                raise DatabaseError(f"Schema '{schema}' does not exist")
-            
-            cursor = conn.cursor()
-            drop_query = f"DROP TABLE IF EXISTS {schema}.{table}"
-            cursor.execute(drop_query)
-            conn.commit()
-            cursor.close()
-            
-            self._validate_drop(conn, schema, table)
-        finally:
-            conn.close()
-
-    def _validate_drop(self, conn, schema, table):
-        if self._table_exists(conn, schema, table):
-            raise DatabaseError(f"Drop operation failed. Table {schema}.{table} still exists")
-
-    def append_data(self, data, schema, table):
-        self.write_data(data, schema, table, mode='append')
-
-    def truncate_and_load(self, data, schema, table):
-        self.truncate_table(schema, table)
-        self.write_data(data, schema, table, mode='append')
-
-    def drop_and_load(self, data, schema, table):
-        self.drop_table(schema, table)
-        self.write_data(data, schema, table, mode='append')
+            self.cursor.close()
+            self.conn.close()
+            logger.info("Database connection closed.")
+        except (pyodbc.ProgrammingError, psycopg2.ProgrammingError) as e:
+            logger.error(f"Programming error while closing database connection: {str(e)}")
+            raise DatabaseError(f"Programming error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while closing database connection: {str(e)}")
+            raise DatabaseError(f"Unexpected error: {str(e)}")

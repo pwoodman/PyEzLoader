@@ -1,20 +1,14 @@
 name: CSV2PostgressTestDropLoad
-###############################################
 ############ Source Configuration #############
-###############################################
 source:
   connection_name: Dev_CSV_Jeopardy
-###############################################
 ######## Transformation Configuration #########
-###############################################
 transformations:
   - type: add_timestamp
     column_name: created_at
-###############################################
 ############ Target Configuration #############
-###############################################
 target:
-  connection_name: Dev_PostGress_Test
+  connection_name: Dev_Postgres_Test
   action: drop_and_load
   schema_name: testschema
   table_name: testcsvtable

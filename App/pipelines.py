@@ -3,10 +3,9 @@ import pandas as pd
 import yaml
 from typing import Dict, List, Any
 import argparse
-from file_connectors import CSVHandler, ExcelHandler
-from database_connectors import PostgresSQLHandler, MSSQLHandler
 from utilities import logger
-from transformations import apply_transformation, transform
+from transformations import transform
+from database_connectors import MultiDB
 
 class ConfigLoader:
     def __init__(self, connections_folder: str):
@@ -17,7 +16,7 @@ class ConfigLoader:
     def load_connections(self) -> Dict[str, Any]:
         connections = {}
         logger.info(f"Loading connections from folder: {self.connections_folder}")
-        
+
         if not os.path.exists(self.connections_folder):
             logger.error(f"Connections folder does not exist: {self.connections_folder}")
             return connections
@@ -117,7 +116,7 @@ class Pipeline:
         logger.info("Writing target data")
         try:
             target_config = self.config_loader.get_config_by_name(self.target_connection_name)
-            target_connector = self.get_connector(target_config['type'], target_config)
+            target_connector = MultiDB(target_config['type'], target_config)
             action = self.target_action
             schema_name = self.target_schema_name
             table_name = self.target_table_name
@@ -126,17 +125,11 @@ class Pipeline:
                 target_connector.write_data(df, mode=action)
             else:
                 if action == 'append':
-                    target_connector.write_data(df, schema_name, table_name, mode='append')
+                    target_connector.handle_dataframe(table_name, df, if_exists='append')
                 elif action == 'truncate_and_load':
-                    if hasattr(target_connector, '_table_exists') and not target_connector._table_exists(target_connector._connect(), schema_name, table_name):
-                        logger.info(f"Table {schema_name}.{table_name} does not exist. Creating it.")
-                        target_connector.write_data(df, schema_name, table_name, mode='replace')
-                    else:
-                        target_connector.truncate_table(schema_name, table_name)
-                        target_connector.write_data(df, schema_name, table_name, mode='replace')
+                    target_connector.handle_dataframe(table_name, df, if_exists='replace')
                 elif action == 'drop_and_load':
-                    target_connector.drop_table(schema_name, table_name)
-                    target_connector.write_data(df, schema_name, table_name, mode='replace')
+                    target_connector.handle_dataframe(table_name, df, if_exists='replace')
                 else:
                     raise ValueError(f"Unsupported action: {action}")
 
@@ -145,8 +138,6 @@ class Pipeline:
         except Exception as e:
             self.handle_error("Error writing target data", e)
             self.status["target_rows"] = 0
-
-
 
     def log_summary(self):
         summary = f"\nPipeline Summary for {self.config['name']}:\n"
@@ -165,7 +156,7 @@ class Pipeline:
         logger.info("Reading source data")
         try:
             source_config = self.config_loader.get_config_by_name(self.source_connection_name)
-            source_connector = self.get_connector(source_config['type'], source_config)
+            source_connector = MultiDB(source_config['type'], source_config)
             df = source_connector.read_data(self.source_query) if self.source_query else source_connector.read_data()
             logger.info(f"Source data read successfully. Rows: {len(df)}")
             return df
@@ -178,34 +169,6 @@ class Pipeline:
         error_message = f"{error_type}: {str(error)}"
         self.status["errors"].append(error_message)
         logger.error(error_message)
-
-    @staticmethod
-    def get_connector(connector_type: str, config: Dict[str, Any]):
-        try:
-            if connector_type == 'PostgresSQL':
-                return PostgresSQLHandler(
-                    dbname=config['dbname'],
-                    user=config['user'],
-                    password=config['password'],
-                    host=config['host'],
-                    port=config['port']
-                )
-            elif connector_type == 'MSSQL':
-                return MSSQLHandler(
-                    server=config['server'],
-                    database=config['database'],
-                    username=config['username'],
-                    password=config['password'],
-                    driver=config.get('driver', '{ODBC Driver 17 for SQL Server}')
-                )
-            elif connector_type == 'CSV':
-                return CSVHandler(config['file_path'], config.get('encoding', 'utf-8'), config.get('delimiter', ','))
-            elif connector_type == 'Excel':
-                return ExcelHandler(config['file_path'], config.get('sheet_name', 'Sheet1'), config.get('header_start_row', 0), config.get('column_start_row', 'A'))
-            else:
-                raise ValueError(f"Unsupported connector type: {connector_type}")
-        except KeyError as e:
-            raise ValueError(f"Missing required configuration for {connector_type}: {str(e)}")
 
 class PipelineManager:
     def __init__(self, pipeline_folder: str, schedules_folder: str, connections_folder: str, utilities_folder: str):
@@ -290,23 +253,6 @@ if __name__ == "__main__":
     logger.info(f"Connections folder: {connections_folder}")
     logger.info(f"Schedules folder: {schedules_folder}")
     logger.info(f"Utilities folder: {utilities_folder}")
-
-    for folder in [pipelines_folder, connections_folder, schedules_folder, utilities_folder]:
-        if os.path.exists(folder):
-            logger.info(f"{os.path.basename(folder)} folder exists. Contents:")
-            for file in os.listdir(folder):
-                file_path = os.path.join(folder, file)
-                if file.endswith('.yaml'):
-                    try:
-                        with open(file_path, 'r') as yaml_file:
-                            logger.info(f"  YAML file found: {file}")
-                            logger.info(f"  Contents of {file}:\n{yaml_file.read()}")
-                    except Exception as e:
-                        logger.error(f"  Error reading {file}: {str(e)}")
-                else:
-                    logger.info(f"  Non-YAML file: {file}")
-        else:
-            logger.error(f"{os.path.basename(folder)} folder does not exist: {folder}")
 
     try:
         manager = PipelineManager(pipelines_folder, schedules_folder, connections_folder, utilities_folder)

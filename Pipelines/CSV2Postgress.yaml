@@ -1,4 +1,4 @@
-name: CSV2PostgressTest
+name: CSV2PostgresTest
 ###############################################
 ############ Source Configuration #############
 ###############################################
@@ -14,7 +14,7 @@ transformations:
 ############ Target Configuration #############
 ###############################################
 target:
-  connection_name: Dev_PostGress_Test
+  connection_name: Dev_Postgres_Test
   action: truncate_and_load
   schema_name: testschema
   table_name: testcsvtable

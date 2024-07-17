@@ -1,11 +1,12 @@
 name: Excel2mssqlTest_A
-Active: True
+enabled: true
 ############ Source Configuration #############
 source:
   connection_name: Dev_Excel_WineMag
 ######## Transformation Configuration #########
 transformations:
-  - type: add_timestamp
+  - name: add_timestamp
+    type: add_timestamp
     column_name: created_at
 ############ Target Configuration #############
 target:

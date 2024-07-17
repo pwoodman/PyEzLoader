@@ -2,3 +2,4 @@ PostgressTest.yaml
 Dev_PostGress_Test.yaml
 combined.py
 application.log
+combined_files.txt
