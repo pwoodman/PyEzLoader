@@ -14,8 +14,12 @@ if __name__ == "__main__":
     pipeline_manager = PipelineManager('Pipelines', 'Schedules', 'Connections', 'Utilities')
 
     if args.run:
-        num_cores = mp.cpu_count() - 1
-        with mp.Pool(num_cores) as pool:
-            pool.starmap(run_pipeline_wrapper, [(args.run, pipeline_manager)])
+        pipeline_name = args.run
+        if pipeline_name in pipeline_manager.list_pipelines():
+            num_cores = mp.cpu_count() - 1
+            with mp.Pool(num_cores) as pool:
+                pool.starmap(run_pipeline_wrapper, [(pipeline_name, pipeline_manager)])
+        else:
+            logging.error(f"Pipeline {pipeline_name} not found. Available pipelines: {pipeline_manager.list_pipelines()}")
     else:
         logging.info("No pipeline specified to run. Use --run <pipeline_name> to run a specific pipeline.")
