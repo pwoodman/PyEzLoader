@@ -1,20 +1,14 @@
-name: CSV2PostgresTest
-###############################################
+name: CSV2PostgressTest_A
 ############ Source Configuration #############
-###############################################
 source:
   connection_name: Dev_CSV_Jeopardy
-###############################################
 ######## Transformation Configuration #########
-###############################################
 transformations:
   - type: add_timestamp
     column_name: created_at
-###############################################
 ############ Target Configuration #############
-###############################################
 target:
   connection_name: Dev_Postgres_Test
-  action: truncate_and_load
+  action: append
   schema_name: testschema
   table_name: testcsvtable

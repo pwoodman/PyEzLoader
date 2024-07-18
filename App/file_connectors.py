@@ -1,9 +1,11 @@
 import pandas as pd
 from openpyxl import load_workbook
 import os
+from typing import Any
+from utilities import logger
 
 class ExcelHandler:
-    def __init__(self, file_path: str, sheet_name: str = 'Sheet1', header_start_row: int = 0, column_start_row: str = 'A'):
+    def __init__(self, file_path: str, sheet_name: str = 'Sheet1', header_start_row: int = 0, column_start_row: Any = 'A'):
         self.file_path = file_path
         self.sheet_name = sheet_name
         self.header_start_row = header_start_row
@@ -27,19 +29,31 @@ class ExcelHandler:
             column_start_index = self._convert_column_to_index(self.column_start_row)
             df = pd.read_excel(self.file_path, sheet_name=self.sheet_name, header=None)
             df = df.iloc[self.header_start_row:, column_start_index:]
+            
+            # Generate column names if they don't exist
+            if df.columns.dtype != 'object':
+                df.columns = [f'Column_{i+1}' for i in range(len(df.columns))]
+            
+            logger.info(f"Data read from Excel file: {self.file_path}")
+            logger.debug(f"DataFrame shape: {df.shape}")
+            logger.debug(f"DataFrame columns: {df.columns}")
             return df
         except Exception as e:
+            logger.error(f"Error reading data from Excel file: {str(e)}")
             raise IOError(f"Error reading data from Excel file: {str(e)}")
 
     def write_data(self, data: pd.DataFrame, mode: str = 'replace'):
         try:
             if mode == 'replace':
                 with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='w') as writer:
-                    data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
+                    data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=True, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
             elif mode == 'append':
                 with pd.ExcelWriter(self.file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
                     data.to_excel(writer, sheet_name=self.sheet_name, index=False, header=False, startrow=self.header_start_row, startcol=self._convert_column_to_index(self.column_start_row))
+            logger.info(f"Data written to Excel file: {self.file_path}")
+            logger.debug(f"Data shape: {data.shape}")
         except Exception as e:
+            logger.error(f"Error writing data to Excel file: {str(e)}")
             raise IOError(f"Error writing data to Excel file: {str(e)}")
 
     def _convert_column_to_index(self, column: str) -> int:
@@ -62,8 +76,13 @@ class CSVHandler:
 
     def read_data(self) -> pd.DataFrame:
         try:
-            return pd.read_csv(self.file_path, encoding=self.encoding, delimiter=self.delimiter)
+            df = pd.read_csv(self.file_path, encoding=self.encoding, delimiter=self.delimiter)
+            logger.info(f"Data read from CSV file: {self.file_path}")
+            logger.debug(f"DataFrame shape: {df.shape}")
+            logger.debug(f"DataFrame columns: {df.columns}")
+            return df
         except Exception as e:
+            logger.error(f"Error reading data from CSV file: {str(e)}")
             raise IOError(f"Error reading data from CSV file: {str(e)}")
 
     def write_data(self, data: pd.DataFrame, mode: str = 'replace'):
@@ -72,5 +91,8 @@ class CSVHandler:
                 data.to_csv(self.file_path, index=False, encoding=self.encoding, sep=self.delimiter)
             elif mode == 'append':
                 data.to_csv(self.file_path, mode='a', header=False, index=False, encoding=self.encoding, sep=self.delimiter)
+            logger.info(f"Data written to CSV file: {self.file_path}")
+            logger.debug(f"Data shape: {data.shape}")
         except Exception as e:
+            logger.error(f"Error writing data to CSV file: {str(e)}")
             raise IOError(f"Error writing data to CSV file: {str(e)}")
