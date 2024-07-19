@@ -1,7 +1,7 @@
 name: MSSQL2PostgressTest
 ############ Source Configuration #############
 source:
-  connection_name: Dev_Postgres_Test
+  connection_name: Dev_MSSQL_Test
   query: select * from testschema.testtable
 ######## Transformation Configuration #########
 transformations:
@@ -14,7 +14,7 @@ transformations:
 add_metadata: true
 ############ Target Configuration #############
 target:
-  connection_name: Dev_MSSQL_Test
+  connection_name: Dev_Postgres_Test
   action: append
   schema_name: testschema
   table_name: testtablefrompostgres
